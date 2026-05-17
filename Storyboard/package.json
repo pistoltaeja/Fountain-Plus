@@ -1,0 +1,13 @@
+{
+    "name": "@fountain-plus/storyboard",
+    "version": "0.1.0",
+    "description": "Fountain-Plus storyboard parser — Fountain Plus Mangaplay format with manga/webtoon extensions",
+    "type": "module",
+    "main": "index.js",
+    "exports": {
+        ".": "./index.js",
+        "./core/parser": "./core/parser/fountain-plus-mangaplay-parser.js",
+        "./core/format-detector": "./core/format-detector.js",
+        "./core/types": "./core/types.js"
+    }
+}
