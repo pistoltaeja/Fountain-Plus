@@ -31,10 +31,12 @@ import { parseTitleCard } from './screenplay-parser.js';
  * Convert a Mangaplay AST to Fountain text format.
  *
  * @param {ScriptAST} ast - Parsed Mangaplay AST
+ * @param {{ includeSourceMap?: boolean }} [options] - Options
  * @returns {string} Fountain-formatted text
  */
-export function mangaplayToFountain(ast)
+export function mangaplayToFountain(ast, options = {})
 {
+    const includeSourceMap = options.includeSourceMap === true;
     const lines = [];
 
     // Title page
@@ -43,7 +45,7 @@ export function mangaplayToFountain(ast)
     // Pages -> scenes
     for (const page of ast.pages)
     {
-        lines.push(...buildPageFountain(page));
+        lines.push(...buildPageFountain(page, includeSourceMap));
     }
 
     return lines.join('\n');
@@ -109,7 +111,7 @@ function buildTitlePage(metadata)
  * @param {Page} page
  * @returns {string[]}
  */
-function buildPageFountain(page)
+function buildPageFountain(page, includeSourceMap)
 {
     const lines = [];
 
@@ -135,7 +137,7 @@ function buildPageFountain(page)
         lines.push('');
         lines.push(heading);
         // Source annotation for page header
-        if (page.lineNumber !== undefined)
+        if (includeSourceMap && page.lineNumber !== undefined)
         {
             lines.push(`[[_src:${page.lineNumber}-${page.lineNumber}]]`);
         }
@@ -154,7 +156,7 @@ function buildPageFountain(page)
     // Process panels
     for (const panel of page.panels)
     {
-        lines.push(...buildPanelFountain(panel));
+        lines.push(...buildPanelFountain(panel, includeSourceMap));
     }
 
     return lines;
@@ -170,7 +172,7 @@ function buildPageFountain(page)
  * @param {Panel} panel
  * @returns {string[]}
  */
-function buildPanelFountain(panel)
+function buildPanelFountain(panel, includeSourceMap)
 {
     const lines = [];
     const lineStart = panel.lineNumber ?? 0;
@@ -193,7 +195,7 @@ function buildPanelFountain(panel)
         {
             lines.push('');
             lines.push(buildTitleCardNote(tc));
-            lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
+            if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
         }
     }
 
@@ -210,7 +212,7 @@ function buildPanelFountain(panel)
             {
                 lines.push('');
                 lines.push(buildTitleCardNoteFromParsed(titleCard));
-                lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
+                if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
             }
 
             // Remaining description as action
@@ -219,14 +221,14 @@ function buildPanelFountain(panel)
             {
                 lines.push('');
                 lines.push(remaining);
-                lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
+                if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
             }
         }
         else
         {
             lines.push('');
             lines.push(panel.description);
-            lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
+            if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
         }
     }
 
@@ -236,7 +238,7 @@ function buildPanelFountain(panel)
         for (const d of panel.dialogue)
         {
             lines.push('');
-            lines.push(...buildDialogueFountain(d, lineStart, lineEnd));
+            lines.push(...buildDialogueFountain(d, lineStart, lineEnd, includeSourceMap));
         }
     }
 
@@ -247,7 +249,7 @@ function buildPanelFountain(panel)
         {
             lines.push('');
             lines.push(`[[SFX: ${sfx}]]`);
-            lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
+            if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
         }
     }
 
@@ -258,7 +260,7 @@ function buildPanelFountain(panel)
         {
             lines.push('');
             lines.push(t.endsWith('TO:') ? t : `>${t}`);
-            lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
+            if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
         }
     }
 
@@ -269,7 +271,7 @@ function buildPanelFountain(panel)
         {
             lines.push('');
             lines.push(`>${c}<`);
-            lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
+            if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
         }
     }
 
@@ -280,7 +282,7 @@ function buildPanelFountain(panel)
         {
             lines.push('');
             lines.push(`~${l}`);
-            lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
+            if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
         }
     }
 
@@ -291,7 +293,7 @@ function buildPanelFountain(panel)
         {
             lines.push('');
             lines.push(`[[${n}]]`);
-            lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
+            if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
         }
     }
 
@@ -300,7 +302,7 @@ function buildPanelFountain(panel)
     {
         lines.push('');
         lines.push(`= ${panel.synopsis}`);
-        lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
+        if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
     }
 
     return lines;
@@ -322,7 +324,7 @@ function buildPanelFountain(panel)
  * @param {number} lineEnd
  * @returns {string[]}
  */
-function buildDialogueFountain(d, lineStart, lineEnd)
+function buildDialogueFountain(d, lineStart, lineEnd, includeSourceMap)
 {
     const lines = [];
 
@@ -346,25 +348,25 @@ function buildDialogueFountain(d, lineStart, lineEnd)
     }
 
     lines.push(charLine);
-    lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
+    if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
 
     // Whisper -> parenthetical
     if (d.type === 'whisper')
     {
         lines.push('(whispering)');
-        lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
+        if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
     }
 
     // Fountain-style parenthetical (from script parser)
     if (d.parenthetical)
     {
         lines.push(`(${d.parenthetical})`);
-        lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
+        if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
     }
 
     // Dialogue text
     lines.push(d.text);
-    lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
+    if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
 
     return lines;
 }
