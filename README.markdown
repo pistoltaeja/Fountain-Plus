@@ -1,6 +1,6 @@
 # Fountain-Plus
 
-Fountain-Plus extends the [Fountain](http://fountain.io) screenplay format with manga, webtoon, and storyboard capabilities. It is a superset of Fountain: any valid Fountain document is a valid Fountain-Plus document.
+Fountain-Plus implements the [Mangaplay](https://mangaplay.studio) format with [Fountain](http://fountain.io) to extend screenplay functionality and add storyboard capabilities for comics, manga, and webtoons. It is a superset of Fountain that targets storyboards.
 
 ## Storyboard Package
 
