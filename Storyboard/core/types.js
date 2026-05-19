@@ -119,6 +119,8 @@
  * @property {string} text
  * @property {boolean} [offPanel]
  * @property {boolean} [dualDialogue] - Fountain dual dialogue ^
+ * @property {string[]} [modifier] - Fountain character extensions e.g. ["CONT'D"], ["SPEAKER", "CONT'D"]
+ * @property {boolean} [continuation] - True when this is a continuation beat of the preceding character's block
  */
 
 /**

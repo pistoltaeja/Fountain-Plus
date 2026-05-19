@@ -367,7 +367,36 @@ export function validateScreenplay(ast)
 export function astToScreenplay(ast)
 {
     const fountain = mangaplayToFountain(ast);
-    return parseFountain(fountain);
+    const screenplay = parseFountain(fountain);
+
+    for (const scene of screenplay.scenes)
+    {
+        let inMidSpeechParen = false;
+        for (let i = 1; i < scene.elements.length; i++)
+        {
+            const el = scene.elements[i];
+            const prev = scene.elements[i - 1];
+            if (el.type === 'action'
+                && el.content.startsWith('(') && el.content.endsWith(')')
+                && (prev.type === 'dialogue' || prev.type === 'parenthetical'))
+            {
+                el.type = 'parenthetical';
+                el.content = el.content.slice(1, -1);
+                inMidSpeechParen = true;
+            }
+            else if (inMidSpeechParen && el.type === 'action')
+            {
+                el.type = 'dialogue';
+                inMidSpeechParen = false;
+            }
+            else
+            {
+                inMidSpeechParen = false;
+            }
+        }
+    }
+
+    return screenplay;
 }
 
 // =============================================================================

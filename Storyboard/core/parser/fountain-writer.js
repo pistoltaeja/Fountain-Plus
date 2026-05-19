@@ -31,21 +31,22 @@ import { parseTitleCard } from './screenplay-parser.js';
  * Convert a Mangaplay AST to Fountain text format.
  *
  * @param {ScriptAST} ast - Parsed Mangaplay AST
- * @param {{ includeSourceMap?: boolean }} [options] - Options
+ * @param {{ includeSourceMap?: boolean, preserveMangaplay?: boolean }} [options] - Options
  * @returns {string} Fountain-formatted text
  */
 export function mangaplayToFountain(ast, options = {})
 {
-    const includeSourceMap = options.includeSourceMap === true;
+    const preserveMangaplay = options.preserveMangaplay !== false;
+    const includeSourceMap = preserveMangaplay && options.includeSourceMap === true;
     const lines = [];
 
     // Title page
-    lines.push(...buildTitlePage(ast.metadata));
+    lines.push(...buildTitlePage(ast.metadata, preserveMangaplay));
 
     // Pages -> scenes
     for (const page of ast.pages)
     {
-        lines.push(...buildPageFountain(page, includeSourceMap));
+        lines.push(...buildPageFountain(page, includeSourceMap, preserveMangaplay));
     }
 
     return lines.join('\n');
@@ -61,9 +62,10 @@ export function mangaplayToFountain(ast, options = {})
  * separated from content by a blank line.
  *
  * @param {import('../types.js').ScriptMetadata} metadata
+ * @param {boolean} [preserveMangaplay=true]
  * @returns {string[]}
  */
-function buildTitlePage(metadata)
+function buildTitlePage(metadata, preserveMangaplay = true)
 {
     const lines = [];
 
@@ -82,14 +84,17 @@ function buildTitlePage(metadata)
         lines.push(`Genre: ${metadata.genre}`);
     }
 
-    if (metadata.format)
+    if (preserveMangaplay)
     {
-        lines.push(`Format: ${metadata.format}`);
-    }
+        if (metadata.format)
+        {
+            lines.push(`Format: ${metadata.format}`);
+        }
 
-    if (metadata.status)
-    {
-        lines.push(`Status: ${metadata.status}`);
+        if (metadata.status)
+        {
+            lines.push(`Status: ${metadata.status}`);
+        }
     }
 
     // Blank line to end title page
@@ -109,9 +114,11 @@ function buildTitlePage(metadata)
  * Convert a single page to Fountain lines.
  *
  * @param {Page} page
+ * @param {boolean} includeSourceMap
+ * @param {boolean} preserveMangaplay
  * @returns {string[]}
  */
-function buildPageFountain(page, includeSourceMap)
+function buildPageFountain(page, includeSourceMap, preserveMangaplay)
 {
     const lines = [];
 
@@ -156,7 +163,7 @@ function buildPageFountain(page, includeSourceMap)
     // Process panels
     for (const panel of page.panels)
     {
-        lines.push(...buildPanelFountain(panel, includeSourceMap));
+        lines.push(...buildPanelFountain(panel, includeSourceMap, preserveMangaplay));
     }
 
     return lines;
@@ -170,9 +177,11 @@ function buildPageFountain(page, includeSourceMap)
  * Convert a single panel to Fountain lines.
  *
  * @param {Panel} panel
+ * @param {boolean} includeSourceMap
+ * @param {boolean} preserveMangaplay
  * @returns {string[]}
  */
-function buildPanelFountain(panel, includeSourceMap)
+function buildPanelFountain(panel, includeSourceMap, preserveMangaplay)
 {
     const lines = [];
     const lineStart = panel.lineNumber ?? 0;
@@ -194,48 +203,123 @@ function buildPanelFountain(panel, includeSourceMap)
         for (const tc of panel.titleCards)
         {
             lines.push('');
-            lines.push(buildTitleCardNote(tc));
+            if (preserveMangaplay)
+            {
+                lines.push(buildTitleCardNote(tc));
+            }
+            else
+            {
+                const name = tc.name || tc.info || '';
+                lines.push(`>${name}<`);
+            }
             if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
         }
     }
 
-    // Description as action with TITLE: extraction
-    if (panel.description)
-    {
-        // Match TITLE keyword with optional colon, any casing, in description.
-        const titleMatch = panel.description.match(/^TITLE(?::)?\s+(.+)$/im);
-        if (titleMatch)
-        {
-            // Extract title card from description
-            const titleCard = parseTitleCard(titleMatch[1]);
-            if (titleCard)
-            {
-                lines.push('');
-                lines.push(buildTitleCardNoteFromParsed(titleCard));
-                if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
-            }
+    // Description and dialogue — interleaved by original source order.
+    // Dialogue items carry _afterDescPara indicating which description
+    // paragraph they follow. When absent, all dialogue comes after all
+    // description (legacy behaviour).
+    const descForFountain = panel.rawDescription || panel.description;
+    const dialogueItems = panel.dialogue && panel.dialogue.length > 0 ? panel.dialogue : [];
+    const hasOrdering = dialogueItems.length > 0 && dialogueItems[0]._afterDescPara != null;
 
-            // Remaining description as action
-            const remaining = panel.description.replace(/\n?TITLE(?::)?\s+.+$/im, '').trim();
-            if (remaining)
-            {
-                lines.push('');
-                lines.push(remaining);
-                if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
-            }
-        }
-        else
+    if (hasOrdering)
+    {
+        const descParas = descForFountain ? descForFountain.split('\n\n') : [];
+        let dIdx = 0;
+        while (dIdx < dialogueItems.length && dialogueItems[dIdx]._afterDescPara === 0)
         {
             lines.push('');
-            lines.push(panel.description);
-            if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
+            lines.push(...buildDialogueFountain(dialogueItems[dIdx], lineStart, lineEnd, includeSourceMap));
+            dIdx++;
+        }
+        for (let pIdx = 0; pIdx < descParas.length; pIdx++)
+        {
+            const para = descParas[pIdx];
+            const titleMatch = para.match(/^TITLE(?::)?\s+(.+)$/im);
+            if (titleMatch)
+            {
+                const titleCard = parseTitleCard(titleMatch[1]);
+                if (titleCard)
+                {
+                    lines.push('');
+                    if (preserveMangaplay)
+                    {
+                        lines.push(buildTitleCardNoteFromParsed(titleCard));
+                    }
+                    else
+                    {
+                        lines.push(`>${titleCard.content || ''}<`);
+                    }
+                    if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
+                }
+                const remaining = para.replace(/\n?TITLE(?::)?\s+.+$/im, '').trim();
+                if (remaining)
+                {
+                    lines.push('');
+                    lines.push(remaining);
+                    if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
+                }
+            }
+            else
+            {
+                lines.push('');
+                lines.push(para);
+                if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
+            }
+
+            while (dIdx < dialogueItems.length && dialogueItems[dIdx]._afterDescPara === pIdx + 1)
+            {
+                lines.push('');
+                lines.push(...buildDialogueFountain(dialogueItems[dIdx], lineStart, lineEnd, includeSourceMap));
+                dIdx++;
+            }
+        }
+        while (dIdx < dialogueItems.length)
+        {
+            lines.push('');
+            lines.push(...buildDialogueFountain(dialogueItems[dIdx], lineStart, lineEnd, includeSourceMap));
+            dIdx++;
         }
     }
-
-    // Dialogue
-    if (panel.dialogue && panel.dialogue.length > 0)
+    else
     {
-        for (const d of panel.dialogue)
+        if (descForFountain)
+        {
+            const titleMatch = descForFountain.match(/^TITLE(?::)?\s+(.+)$/im);
+            if (titleMatch)
+            {
+                const titleCard = parseTitleCard(titleMatch[1]);
+                if (titleCard)
+                {
+                    lines.push('');
+                    if (preserveMangaplay)
+                    {
+                        lines.push(buildTitleCardNoteFromParsed(titleCard));
+                    }
+                    else
+                    {
+                        lines.push(`>${titleCard.content || ''}<`);
+                    }
+                    if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
+                }
+                const remaining = descForFountain.replace(/\n?TITLE(?::)?\s+.+$/im, '').trim();
+                if (remaining)
+                {
+                    lines.push('');
+                    lines.push(remaining);
+                    if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
+                }
+            }
+            else
+            {
+                lines.push('');
+                lines.push(descForFountain);
+                if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
+            }
+        }
+        for (const d of dialogueItems)
         {
             lines.push('');
             lines.push(...buildDialogueFountain(d, lineStart, lineEnd, includeSourceMap));
@@ -248,7 +332,14 @@ function buildPanelFountain(panel, includeSourceMap)
         for (const sfx of panel.sfx)
         {
             lines.push('');
-            lines.push(`[[SFX: ${sfx}]]`);
+            if (preserveMangaplay)
+            {
+                lines.push(`[[SFX: ${sfx}]]`);
+            }
+            else
+            {
+                lines.push(`SFX: ${sfx}`);
+            }
             if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
         }
     }
@@ -328,27 +419,37 @@ function buildDialogueFountain(d, lineStart, lineEnd, includeSourceMap)
 {
     const lines = [];
 
-    // Character name (ALL CAPS in Fountain)
-    let charLine = d.character;
-
-    // Dual dialogue
-    if (d.dualDialogue)
+    if (!d.continuation)
     {
-        charLine += ' ^';
-    }
+        // Character name (ALL CAPS in Fountain)
+        let charLine = d.character;
 
-    // Modifiers
-    if (d.offPanel)
-    {
-        charLine += ' (O.S.)';
-    }
-    else if (d.type === 'thought' || d.type === 'caption')
-    {
-        charLine += ' (V.O.)';
-    }
+        // Modifiers (extensions) — must come before dual dialogue caret per Fountain spec
+        if (d.modifier && Array.isArray(d.modifier))
+        {
+            for (const ext of d.modifier)
+            {
+                charLine += ` (${ext})`;
+            }
+        }
+        else if (d.offPanel)
+        {
+            charLine += ' (O.S.)';
+        }
+        else if (d.type === 'thought' || d.type === 'caption')
+        {
+            charLine += ' (V.O.)';
+        }
 
-    lines.push(charLine);
-    if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
+        // Dual dialogue
+        if (d.dualDialogue)
+        {
+            charLine += ' ^';
+        }
+
+        lines.push(charLine);
+        if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
+    }
 
     // Whisper -> parenthetical
     if (d.type === 'whisper')
@@ -364,8 +465,8 @@ function buildDialogueFountain(d, lineStart, lineEnd, includeSourceMap)
         if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
     }
 
-    // Dialogue text
-    lines.push(d.text);
+    // Dialogue text (prefer rawText to preserve emphasis markers for the Fountain pipeline)
+    lines.push(d.rawText || d.text);
     if (includeSourceMap) lines.push(`[[_src:${lineStart}-${lineEnd}]]`);
 
     return lines;

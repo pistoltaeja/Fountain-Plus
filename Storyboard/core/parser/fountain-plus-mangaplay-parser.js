@@ -50,8 +50,8 @@ const KNOWN_METADATA_KEYS = new Set([
 ]);
 
 // Default English message templates for warning codes. Used to populate the
-// existing `message` field for backward compat. Localisation layer (Phase 7)
-// supersedes these.
+// existing `message` field for backward compat. Localisation layer supersedes
+// these via diagnostic-i18n.js.
 const WARNING_TEMPLATES = {
     WARN_PAGE_LOWERCASE:
         'Page header should be uppercase: write "# PAGE {0}" instead of "# {1} {0}".',
@@ -113,7 +113,7 @@ const STATIC_PATTERNS = {
 
     // Page header: # PAGE 1 INT. PLACE - TIME (case-insensitive on PAGE keyword)
     // Period after INT/EXT is optional — parser auto-corrects and warns if missing.
-    pageHeader: /^#\s+PAGE\s+(\d+(?:-(?:\d+|COVER|[IVXLCDM]+))?)\s*(?:(INT|EXT)(\.?)\s+(.+?)(?:\s*-\s*(DAY|NIGHT|DAWN|DUSK))?)?$/i
+    pageHeader: /^#\s+PAGE\s+(\d+(?:-(?:\d+|COVER|[IVXLCDM]+))?)\s*(?:(INT|EXT|EST|INT\.\/EXT\.|INT\/EXT|I\/E)(\.?)\s+(.+?)(?:\s*-\s*(DAY|NIGHT|DAWN|DUSK))?)?$/i
 };
 
 // Permissive panel detection. Captures leading indent (group 1) so the parser
@@ -150,11 +150,11 @@ const PATTERNS = {
     ...STATIC_PATTERNS,
     // Legacy Convention A patterns — tests or external callers may import.
     panel: /^\s{4}Panel\s+(\d+(?:-\d+)?)\s*((?:\s*\[[A-Z][A-Z0-9\s\-\/,]*\])+)?$/,
-    dialogueChar: /^\s{8}([A-Z][A-Z\s']+?)(?:\s+\(O\.P\.\))?$/,
+    dialogueChar: /^\s{8}([A-Z][A-Z0-9\s'\-]+?)(?:\s+((?:\([A-Z][A-Z0-9.\s'']+\)\s*)+))?(\s*\^)?$/,
     dialogueType: /^\s{8}\((thought|whisper|caption)\)$/,
     sfx: /^\s{4}SFX(?:\s*:)?\s+(.+)$/,
     titleCardType: /^\s{4}\(([A-Z\s]+TITLE)\)$/,
-    titleCardName: /^\s{4}([A-Z][A-Z\s']+)$/,
+    titleCardName: /^\s{4}([A-Z][A-Z0-9\s'\-]+)$/,
     titleCardInfo: /^\s{4}\(([^)]+)\)$/,
     condensedTitle: /^\s{4}(TITLE)(?::)?\s+(.+)$/i
 };
@@ -173,18 +173,18 @@ function makePatterns(panelIndent)
     return {
         ...STATIC_PATTERNS,
         panel:          new RegExp('^' + p + 'Panel\\s+(\\d+(?:-\\d+)?)\\s*((?:\\s*\\[[A-Z][A-Z0-9\\s\\-\\/,]*\\])+)?\\s*$'),
-        dialogueChar:   new RegExp('^' + d + '([A-Z][A-Z\\s\']+?)(?:\\s+\\(O\\.P\\.\\))?$'),
+        dialogueChar:   new RegExp('^' + d + '([A-Z][A-Z0-9\\s\'\\-]+?)(?:\\s+((?:\\([A-Z][A-Z0-9.\\s\'\']+\\)\\s*)+))?(\\s*\\^)?$'),
         dialogueType:   new RegExp('^' + d + '\\((thought|whisper|caption)\\)$'),
         sfx:            new RegExp('^' + p + 'SFX(?:\\s*:)?\\s+(.+)$'),
         titleCardType:  new RegExp('^' + p + '\\(([A-Z\\s]+TITLE)\\)$'),
-        titleCardName:  new RegExp('^' + p + '([A-Z][A-Z\'\\s]+)$'),
+        titleCardName:  new RegExp('^' + p + '([A-Z][A-Z0-9\'\\s\\-]+)$'),
         titleCardInfo:  new RegExp('^' + p + '\\(([^)]+)\\)$'),
         // Match "TITLE" keyword (any casing — case-warning emitted later)
         // followed by an OPTIONAL colon and at least one space, then the
         // pipe-delimited body. Capture group 1 = the literal keyword as
         // written (for case validation), group 2 = the body.
         condensedTitle: new RegExp('^' + p + '(TITLE)(?::)?\\s+(.+)$', 'i'),
-        forcedChar:     new RegExp('^' + d + '@([A-Z].+?)(?:\\s+\\(O\\.P\\.\\))?$'),
+        forcedChar:     new RegExp('^' + d + '@([A-Z][A-Z0-9\\s\'\\-&,.]*?)(?:\\s+((?:\\([A-Z][A-Z0-9.\\s\'\']+\\)\\s*)+))?(\\s*\\^)?$'),
         transitionTo:   new RegExp('^' + p + '.+TO:$'),
         forcedTrans:    new RegExp('^' + p + '>.+[^<]$'),
         centered:       new RegExp('^' + p + '>(.+)<$'),
@@ -192,6 +192,14 @@ function makePatterns(panelIndent)
         lyrics:         new RegExp('^' + p + '~(.+)$'),
         forcedAction:   new RegExp('^' + p + '!.+$')
     };
+}
+
+function parseExtensions(raw)
+{
+    if (!raw) return [];
+    const matches = raw.match(/\([A-Z][A-Z0-9.\s'']+\)/g);
+    if (!matches) return [];
+    return matches.map(m => m.slice(1, -1).trim());
 }
 
 // =============================================================================
@@ -310,12 +318,11 @@ export function parseScript(markdown, options = {})
         metadata._totalPagesImplicit = true;
     }
 
-    // Phase 8A: Explicit format identification
     let detectedFormat = 'unknown';
     const hasPageHeaders = /^#\s+PAGE\s+\d/mi.test(markdown);
     const hasPanelLines = /^\s*Panel\s+\d/m.test(markdown);
     const hasMangaplayConstruct = hasPageHeaders || hasPanelLines;
-    const hasFountainMarkers = /^(INT|EXT|EST|INT\/EXT|I\/E)[\.\s]/m.test(markdown)
+    const hasFountainMarkers = /^(INT|EXT|EST|INT\/EXT|I\/E)[\.\s]/mi.test(markdown)
         || /^[A-Z][A-Z\s]*TO:$/m.test(markdown)
         || /^Title:\s/m.test(markdown);
     const hasMangaplayExtensions = /^\s*SFX[\s:]/mi.test(markdown)
@@ -335,7 +342,6 @@ export function parseScript(markdown, options = {})
         detectedFormat = 'fountain';
     }
 
-    // Phase 8C: Smell test pass
     runSmellTests(pages, markdown, warnings, emitWarning);
 
     return { metadata, pages, readingDirection, errors, warnings, diagnostics: warnings, format: 'mangaplay', detectedFormat };
@@ -681,7 +687,25 @@ function parsePages(lines, errors, emitWarning)
     let dialogueIndentStr = '        '; // cached ' '.repeat(panelIndent + 4)
     let panelIndentStr = '    ';     // cached ' '.repeat(panelIndent)
     let currentDialogue = null;
+    let lastDialogueChar = null;
     let descriptionGap = false;
+
+    function appendDescription(panel, desc)
+    {
+        if (panel.description)
+        {
+            const separator = descriptionGap ? '\n\n' : '\n';
+            if (descriptionGap) panel._descParaCount++;
+            panel.description += separator + desc;
+        }
+        else
+        {
+            panel._descParaCount++;
+            panel.description = desc;
+        }
+        descriptionGap = false;
+    }
+
     let inTitleCard = false;
     let titleCardType = '';
     let panelIndex = 0; // Sequential index within current page
@@ -745,7 +769,7 @@ function parsePages(lines, errors, emitWarning)
             continue;
         }
 
-        // Legacy `# Panel N [tags]` (Spec V2 §6.1 / Phase 2 task 16). Demote
+        // Legacy `# Panel N [tags]` (Spec V2 §6.1). Demote
         // to a warning and rewrite the line so it falls through into the
         // PANEL_DETECT branch below. Case-insensitive on "Panel".
         const legacyHashPanel = /^(#)\s+(Panel)\s+(\d+(?:-\d+)?)\s*((?:\s*\[[^\]]*\])*)?\s*$/i.exec(line);
@@ -865,7 +889,7 @@ function parsePages(lines, errors, emitWarning)
                     });
                 }
                 currentPage.location = {
-                    type: /** @type {import('../types.js').LocationType} */ (pageMatch[2]),
+                    type: /** @type {import('../types.js').LocationType} */ (pageMatch[2].toUpperCase()),
                     place: pageMatch[4] ? pageMatch[4].trim() : '',
                     time: pageMatch[5] ? /** @type {import('../types.js').TimeOfDay} */ (pageMatch[5]) : undefined
                 };
@@ -873,6 +897,7 @@ function parsePages(lines, errors, emitWarning)
 
             currentPanel = null;
             currentDialogue = null;
+            lastDialogueChar = null;
             inTitleCard = false;
             panelIndex = 0;
             continue;
@@ -880,7 +905,7 @@ function parsePages(lines, errors, emitWarning)
 
         if (!currentPage)
         {
-            // Implicit Page 1 (Spec V2 §5.4 / Phase 2 task 7).
+            // Implicit Page 1 (Spec V2 §5.4).
             // Content before any `# PAGE` header MUST be assigned to Page 1.
             // Trigger when we hit body content (Panel marker, scene heading,
             // transition, character cue, action prose, etc).
@@ -914,7 +939,7 @@ function parsePages(lines, errors, emitWarning)
                 continue;
             }
             // Title-page continuation line (3+ leading spaces, after a key
-            // was seen). Spec V2 §4 / Phase 2 task 12.
+            // was seen). Spec V2 §4.
             if (inTitlePage && lastTitleKey && /^\s{3,}\S/.test(line))
             {
                 continue;
@@ -1012,12 +1037,12 @@ function parsePages(lines, errors, emitWarning)
                 titleCards: [],
                 lineNumber: i,
                 lineNumberEnd: i,
-                _panelIndent: panelIndent
+                _panelIndent: panelIndent,
+                _descParaCount: 0
             };
 
             panelIndex++;
 
-            // Phase 0B: scene heading inlined on panel line
             const trailingText = detect[4];
             if (trailingText)
             {
@@ -1030,6 +1055,7 @@ function parsePages(lines, errors, emitWarning)
             }
 
             currentDialogue = null;
+            lastDialogueChar = null;
             inTitleCard = false;
             descriptionGap = false;
             continue;
@@ -1055,7 +1081,7 @@ function parsePages(lines, errors, emitWarning)
         // ====================================================================
 
         // Scene heading. Standalone Fountain scene heading at column 0 (or
-        // forced via leading period) — Spec V2 §7.1 / Phase 2 task 3.
+        // forced via leading period) — Spec V2 §7.1.
         // Examples: `INT. KITCHEN - DAY`, `EXT. CLIFFTOP`, `.kitchen`.
         const trimmedSH = line.trim();
         const sceneHeadingMatch =
@@ -1082,7 +1108,7 @@ function parsePages(lines, errors, emitWarning)
         }
 
         // Transitions. Standalone uppercase line ending in TO:, or FADE OUT.,
-        // FADE IN:. Spec V2 §7.5 / Phase 2 task 5.
+        // FADE IN:. Spec V2 §7.5.
         if (line === trimmedSH && trimmedSH !== '')
         {
             if (/^[A-Z][A-Z\s]*TO:$/.test(trimmedSH)
@@ -1102,8 +1128,8 @@ function parsePages(lines, errors, emitWarning)
         }
 
         // Centered `> text <` (column 0 only, leading > and trailing <).
-        // Spec V2 §7.10 / Phase 2 task 10. (The indent-aware `patterns.centered`
-        // below handles inside-panel column-N centering for legacy files.)
+        // Spec V2 §7.10. (The indent-aware `patterns.centered` below
+        // handles inside-panel column-N centering for legacy files.)
         if (line === trimmedSH)
         {
             const centeredCol0 = /^>\s*(.+?)\s*<$/.exec(trimmedSH);
@@ -1114,7 +1140,7 @@ function parsePages(lines, errors, emitWarning)
             }
         }
 
-        // Lyrics `~line` at column 0. Spec V2 §7.10 / Phase 2 task 11.
+        // Lyrics `~line` at column 0. Spec V2 §7.10.
         if (line === trimmedSH && /^~/.test(trimmedSH))
         {
             attachLyric(currentPanel, currentPage, trimmedSH.slice(1));
@@ -1122,10 +1148,10 @@ function parsePages(lines, errors, emitWarning)
         }
 
         // Forced character cue `@alice` at column 0 OR at dialogue band — a
-        // leading `@` forces a cue regardless of casing. Spec V2 §7.3 /
-        // Phase 2 task 6. The dialogue-band branch lower in this loop already
-        // handles `forcedChar` (col-of-dialogueIndent + `@NAME`). This block
-        // adds COLUMN-0 forced cues for Fountain compatibility.
+        // leading `@` forces a cue regardless of casing. The dialogue-band
+        // branch lower in this loop already handles `forcedChar`
+        // (col-of-dialogueIndent + `@NAME`). This block adds COLUMN-0
+        // forced cues for Fountain compatibility.
         if (line === trimmedSH && /^@[A-Za-z]/.test(trimmedSH))
         {
             // Need a current panel to attach the dialogue. If none, synthesise
@@ -1143,21 +1169,26 @@ function parsePages(lines, errors, emitWarning)
                     titleCards: [],
                     lineNumber: i,
                     lineNumberEnd: i,
-                    _panelIndent: panelIndent
+                    _panelIndent: panelIndent,
+                    _descParaCount: 0
                 };
                 panelIndex++;
             }
-            const cueMatch = /^@([A-Za-z][^\(\^]*?)(\s*\^)?(?:\s+\(O\.P\.\))?$/.exec(trimmedSH);
+            const cueMatch = /^@([A-Za-z][A-Za-z0-9'\s\-&,.]*?)(?:\s+((?:\([A-Z][A-Z0-9.\s'']+\)\s*)+))?(\s*\^)?$/.exec(trimmedSH);
             if (cueMatch && currentPanel)
             {
                 let charName = cueMatch[1].trim();
-                const dual = !!cueMatch[2];
+                const dual = !!cueMatch[3];
+                const extensions = parseExtensions(cueMatch[2]);
+                const isOffPanel = extensions.includes('O.P.') || extensions.includes('O.S.');
+                lastDialogueChar = null;
                 currentDialogue = {
                     character: charName,
                     type: 'speech',
                     text: '',
-                    offPanel: trimmedSH.includes('(O.P.)'),
-                    ...(dual ? { dualDialogue: true } : {})
+                    offPanel: isOffPanel,
+                    ...(dual ? { dualDialogue: true } : {}),
+                    ...(extensions.length > 0 ? { modifier: extensions } : {})
                 };
                 continue;
             }
@@ -1177,6 +1208,7 @@ function parsePages(lines, errors, emitWarning)
         // TASK 4: Transitions at panel band.
         if (patterns.transitionTo.test(line) && !line.trim().startsWith('Panel') && !/^SFX[\s:]/i.test(line.trim()))
         {
+            lastDialogueChar = null;
             if (!currentPanel.transitions) currentPanel.transitions = [];
             currentPanel.transitions.push(line.trim());
             continue;
@@ -1191,6 +1223,7 @@ function parsePages(lines, errors, emitWarning)
         }
         if (patterns.forcedTrans.test(line))
         {
+            lastDialogueChar = null;
             if (!currentPanel.transitions) currentPanel.transitions = [];
             currentPanel.transitions.push(line.trim().substring(1).trim());
             continue;
@@ -1216,17 +1249,7 @@ function parsePages(lines, errors, emitWarning)
         // TASK 9: Forced action !text (at panel band).
         if (patterns.forcedAction.test(line))
         {
-            const desc = line.trim().substring(1).trim();
-            if (currentPanel.description)
-            {
-                const separator = descriptionGap ? '\n\n' : '\n';
-                currentPanel.description += separator + desc;
-            }
-            else
-            {
-                currentPanel.description = desc;
-            }
-            descriptionGap = false;
+            appendDescription(currentPanel, line.trim().substring(1).trim());
             continue;
         }
 
@@ -1246,6 +1269,7 @@ function parsePages(lines, errors, emitWarning)
         })();
         if (sfxLineMatch)
         {
+            lastDialogueChar = null;
             const sfxKeyword = sfxLineMatch[1];
             if (sfxKeyword !== 'SFX')
             {
@@ -1279,6 +1303,7 @@ function parsePages(lines, errors, emitWarning)
         })();
         if (condensedMatch)
         {
+            lastDialogueChar = null;
             const keyword = condensedMatch[1];
             if (keyword !== 'TITLE')
             {
@@ -1339,6 +1364,63 @@ function parsePages(lines, errors, emitWarning)
         const trimmed = line.trim();
         if (currentPanel && trimmed !== '' && leading > panelIndent + 4)
         {
+            // Dialogue continuation at deeper indent: mid-speech parenthetical
+            // or text line following a pushed dialogue. Creates a new dialogue
+            // beat under the same character.
+            if (!currentDialogue && lastDialogueChar)
+            {
+                const deepTypeMatch2 = /^\((thought|whisper|caption)\)$/.exec(trimmed);
+                if (deepTypeMatch2)
+                {
+                    currentDialogue = {
+                        character: lastDialogueChar.character,
+                        type: /** @type {import('../types.js').DialogueType} */ (deepTypeMatch2[1]),
+                        text: '',
+                        offPanel: lastDialogueChar.offPanel,
+                        continuation: true,
+                        ...(lastDialogueChar.modifier ? { modifier: lastDialogueChar.modifier } : {})
+                    };
+                    continue;
+                }
+                if (trimmed.startsWith('(') && trimmed.endsWith(')'))
+                {
+                    const inner = trimmed.slice(1, -1).trim();
+                    if (inner)
+                    {
+                        currentDialogue = {
+                            character: lastDialogueChar.character,
+                            type: 'speech',
+                            text: '',
+                            offPanel: lastDialogueChar.offPanel,
+                            continuation: true,
+                            ...(lastDialogueChar.modifier ? { modifier: lastDialogueChar.modifier } : {}),
+                            parenthetical: inner
+                        };
+                        continue;
+                    }
+                }
+                if (!trimmed.startsWith('('))
+                {
+                    currentDialogue = {
+                        character: lastDialogueChar.character,
+                        type: 'speech',
+                        text: trimmed,
+                        offPanel: lastDialogueChar.offPanel,
+                        continuation: true,
+                        ...(lastDialogueChar.modifier ? { modifier: lastDialogueChar.modifier } : {})
+                    };
+                    currentDialogue._afterDescPara = currentPanel._descParaCount;
+                    currentPanel.dialogue.push(currentDialogue);
+                    lastDialogueChar = {
+                        character: currentDialogue.character,
+                        offPanel: currentDialogue.offPanel,
+                        modifier: currentDialogue.modifier
+                    };
+                    currentDialogue = null;
+                    continue;
+                }
+            }
+
             // Dialogue-type marker at deeper indent (parenthetical).
             const deepTypeMatch = /^\((thought|whisper|caption)\)$/.exec(trimmed);
             if (deepTypeMatch && currentDialogue)
@@ -1352,14 +1434,15 @@ function parsePages(lines, errors, emitWarning)
             // Use a permissive "looks like a name" test (first char letter,
             // whole line is a single name-like token with no sentence-ending
             // punctuation or lowercase words) — then validate ALL CAPS.
-            const nameLikePattern = /^@?([A-Za-z][A-Za-z'\s\-\.]*?)(\s*\^)?(?:\s+\(O\.P\.\))?$/;
+            const nameLikePattern = /^@?([A-Za-z][A-Za-z0-9'\s\-\.]*?)(?:\s+((?:\([A-Z][A-Z0-9.\s'']+\)\s*)+))?(\s*\^)?$/;
             const nameLikeMatch = !currentDialogue || currentDialogue.text
                 ? nameLikePattern.exec(trimmed)
                 : null;
 
+            const nameOnly = trimmed.replace(/\s*\(.*$/, '').replace(/\s*\^$/, '');
             const looksLikeName = nameLikeMatch
-                && !/[.!?,;:]$/.test(trimmed.replace(/\s*\(O\.P\.\)$/, ''))
-                && trimmed.split(/\s+/).length <= 4;
+                && !/[.!?,;:]$/.test(trimmed.replace(/(?:\s*\([A-Z][A-Z0-9.\s'']+\))+$/, '').replace(/\s*\^$/, ''))
+                && nameOnly.split(/\s+/).length <= 4;
 
             if (looksLikeName)
             {
@@ -1385,22 +1468,18 @@ function parsePages(lines, errors, emitWarning)
 
                 let charName = rawName;
                 let dualDialogue = false;
-                if (nameLikeMatch[2])
-                {
-                    dualDialogue = true;
-                }
-                if (charName.endsWith('^'))
-                {
-                    dualDialogue = true;
-                    charName = charName.slice(0, -1).trim();
-                }
+                const extensions = parseExtensions(nameLikeMatch[2]);
+                if (nameLikeMatch[3]) dualDialogue = true;
+                const isOffPanel = extensions.includes('O.P.') || extensions.includes('O.S.');
 
+                lastDialogueChar = null;
                 currentDialogue = {
                     character: charName,
                     type: 'speech',
                     text: '',
-                    offPanel: line.includes('(O.P.)'),
-                    ...(dualDialogue ? { dualDialogue: true } : {})
+                    offPanel: isOffPanel,
+                    ...(dualDialogue ? { dualDialogue: true } : {}),
+                    ...(extensions.length > 0 ? { modifier: extensions } : {})
                 };
                 continue;
             }
@@ -1420,7 +1499,13 @@ function parsePages(lines, errors, emitWarning)
                 if (!trimmed.startsWith('('))
                 {
                     currentDialogue.text = trimmed;
+                    currentDialogue._afterDescPara = currentPanel._descParaCount;
                     currentPanel.dialogue.push(currentDialogue);
+                    lastDialogueChar = {
+                        character: currentDialogue.character,
+                        offPanel: currentDialogue.offPanel,
+                        modifier: currentDialogue.modifier
+                    };
                     currentDialogue = null;
                     continue;
                 }
@@ -1492,19 +1577,20 @@ function parsePages(lines, errors, emitWarning)
             if (!treatAsDescription)
             {
                 let charName = (charMatch ? charMatch[1] : forcedCharMatch[1]).trim();
-                // TASK 11: Dual dialogue — character name ending with ^
                 let dualDialogue = false;
-                if (charName.endsWith('^'))
-                {
-                    dualDialogue = true;
-                    charName = charName.slice(0, -1).trim();
-                }
+                const extGroup = charMatch ? charMatch[2] : forcedCharMatch[2];
+                const caretGroup = charMatch ? charMatch[3] : forcedCharMatch[3];
+                if (caretGroup) dualDialogue = true;
+                const extensions = parseExtensions(extGroup);
+                const isOffPanel = extensions.includes('O.P.') || extensions.includes('O.S.');
+                lastDialogueChar = null;
                 currentDialogue = {
                     character: charName,
                     type: 'speech',
                     text: '',
-                    offPanel: line.includes('(O.P.)'),
-                    ...(dualDialogue ? { dualDialogue: true } : {})
+                    offPanel: isOffPanel,
+                    ...(dualDialogue ? { dualDialogue: true } : {}),
+                    ...(extensions.length > 0 ? { modifier: extensions } : {})
                 };
                 continue;
             }
@@ -1513,17 +1599,7 @@ function parsePages(lines, errors, emitWarning)
             // through to the generic description branch — in Convention B
             // the generic branch only catches column-0 lines, but this fallback
             // originates from a dialogue-band line.
-            const desc = line.trim();
-            if (currentPanel.description)
-            {
-                const separator = descriptionGap ? '\n\n' : '\n';
-                currentPanel.description += separator + desc;
-            }
-            else
-            {
-                currentPanel.description = desc;
-            }
-            descriptionGap = false;
+            appendDescription(currentPanel, line.trim());
             continue;
         }
 
@@ -1545,6 +1621,71 @@ function parsePages(lines, errors, emitWarning)
                 if (infoMatch) i++; // Skip info line
                 inTitleCard = false;
                 continue;
+            }
+        }
+
+        // Dialogue continuation at dialogue band: mid-speech parenthetical
+        // or text line following a pushed dialogue under the same character.
+        if (!currentDialogue && lastDialogueChar && currentPanel
+            && line.startsWith(dialogueIndentStr) && line.trim() !== '')
+        {
+            const contText = line.trim();
+            if (panelIndent === 4 && line.startsWith(' '.repeat(panelIndent + 8)))
+            {
+                // Over-indented in Conv A — skip, fall through.
+            }
+            else
+            {
+                const contTypeMatch = /^\((thought|whisper|caption)\)$/.exec(contText);
+                if (contTypeMatch)
+                {
+                    currentDialogue = {
+                        character: lastDialogueChar.character,
+                        type: /** @type {import('../types.js').DialogueType} */ (contTypeMatch[1]),
+                        text: '',
+                        offPanel: lastDialogueChar.offPanel,
+                        continuation: true,
+                        ...(lastDialogueChar.modifier ? { modifier: lastDialogueChar.modifier } : {})
+                    };
+                    continue;
+                }
+                if (contText.startsWith('(') && contText.endsWith(')'))
+                {
+                    const inner = contText.slice(1, -1).trim();
+                    if (inner)
+                    {
+                        currentDialogue = {
+                            character: lastDialogueChar.character,
+                            type: 'speech',
+                            text: '',
+                            offPanel: lastDialogueChar.offPanel,
+                            continuation: true,
+                            ...(lastDialogueChar.modifier ? { modifier: lastDialogueChar.modifier } : {}),
+                            parenthetical: inner
+                        };
+                        continue;
+                    }
+                }
+                if (!contText.startsWith('('))
+                {
+                    currentDialogue = {
+                        character: lastDialogueChar.character,
+                        type: 'speech',
+                        text: contText,
+                        offPanel: lastDialogueChar.offPanel,
+                        continuation: true,
+                        ...(lastDialogueChar.modifier ? { modifier: lastDialogueChar.modifier } : {})
+                    };
+                    currentDialogue._afterDescPara = currentPanel._descParaCount;
+                    currentPanel.dialogue.push(currentDialogue);
+                    lastDialogueChar = {
+                        character: currentDialogue.character,
+                        offPanel: currentDialogue.offPanel,
+                        modifier: currentDialogue.modifier
+                    };
+                    currentDialogue = null;
+                    continue;
+                }
             }
         }
 
@@ -1577,7 +1718,13 @@ function parsePages(lines, errors, emitWarning)
                     if (!text.startsWith('('))
                     {
                         currentDialogue.text = text;
+                        currentDialogue._afterDescPara = currentPanel._descParaCount;
                         currentPanel.dialogue.push(currentDialogue);
+                        lastDialogueChar = {
+                            character: currentDialogue.character,
+                            offPanel: currentDialogue.offPanel,
+                            modifier: currentDialogue.modifier
+                        };
                         currentDialogue = null;
                         continue;
                     }
@@ -1586,9 +1733,14 @@ function parsePages(lines, errors, emitWarning)
         }
 
         // Track blank lines between description paragraphs.
-        if (currentPanel && currentPanel.description && line.trim() === '')
+        // Also clear lastDialogueChar — blank line ends continuation window.
+        if (line.trim() === '')
         {
-            descriptionGap = true;
+            lastDialogueChar = null;
+            if (currentPanel && currentPanel.description)
+            {
+                descriptionGap = true;
+            }
         }
 
         // Forced @cue follow-up: when currentDialogue was set by a column-0
@@ -1610,7 +1762,13 @@ function parsePages(lines, errors, emitWarning)
             if (!trimmedFC.startsWith('('))
             {
                 currentDialogue.text = trimmedFC;
+                currentDialogue._afterDescPara = currentPanel._descParaCount;
                 currentPanel.dialogue.push(currentDialogue);
+                lastDialogueChar = {
+                    character: currentDialogue.character,
+                    offPanel: currentDialogue.offPanel,
+                    modifier: currentDialogue.modifier
+                };
                 currentDialogue = null;
                 continue;
             }
@@ -1625,19 +1783,11 @@ function parsePages(lines, errors, emitWarning)
             : (line.startsWith(panelIndentStr) && !line.startsWith(dialogueIndentStr));
         if (isDescriptionBand)
         {
+            lastDialogueChar = null;
             const desc = line.trim();
             if (desc && !desc.startsWith('Panel') && !/^SFX[\s:]/i.test(desc) && !desc.startsWith('(') && !/^TITLE(?::)?\s/i.test(desc))
             {
-                if (currentPanel.description)
-                {
-                    const separator = descriptionGap ? '\n\n' : '\n';
-                    currentPanel.description += separator + desc;
-                }
-                else
-                {
-                    currentPanel.description = desc;
-                }
-                descriptionGap = false;
+                appendDescription(currentPanel, desc);
             }
             continue;
         }
@@ -1648,10 +1798,11 @@ function parsePages(lines, errors, emitWarning)
         if (currentPanel && line.startsWith(dialogueIndentStr) && line.trim() !== '')
         {
             const bandTrimmed = line.trim();
-            const bandCandidate = /^@?([A-Za-z][A-Za-z'\s\-\.]*?)(\s*\^)?(?:\s+\(O\.P\.\))?$/.exec(bandTrimmed);
+            const bandCandidate = /^@?([A-Za-z][A-Za-z0-9'\s\-\.]*?)(?:\s+((?:\([A-Z][A-Z0-9.\s'']+\)\s*)+))?(\s*\^)?$/.exec(bandTrimmed);
+            const bandNameOnly = bandTrimmed.replace(/\s*\(.*$/, '').replace(/\s*\^$/, '');
             const bandLooksLikeName = bandCandidate
-                && !/[.!?,;:]$/.test(bandTrimmed.replace(/\s*\(O\.P\.\)$/, ''))
-                && bandTrimmed.split(/\s+/).length <= 4
+                && !/[.!?,;:]$/.test(bandTrimmed.replace(/(?:\s*\([A-Z][A-Z0-9.\s'']+\))+$/, '').replace(/\s*\^$/, ''))
+                && bandNameOnly.split(/\s+/).length <= 4
                 // Exclude dialogue-type parentheticals (already handled above).
                 && !/^\((thought|whisper|caption)\)$/.test(bandTrimmed);
             if (bandLooksLikeName)
@@ -1690,6 +1841,7 @@ function parsePages(lines, errors, emitWarning)
         //   should become description.
         if (currentPanel && !currentDialogue && line.startsWith(dialogueIndentStr) && line.trim() !== '')
         {
+            lastDialogueChar = null;
             // Guard against over-indented content in Conv A (12+ spaces) which
             // should fall through to the generic description/ignore path.
             const overIndented = panelIndent === 4 && line.startsWith(' '.repeat(panelIndent + 8));
@@ -1698,21 +1850,8 @@ function parsePages(lines, errors, emitWarning)
                 const desc = line.trim();
                 if (desc && !desc.startsWith('Panel') && !/^SFX[\s:]/i.test(desc) && !desc.startsWith('(') && !/^TITLE(?::)?\s/i.test(desc))
                 {
-                    if (currentPanel.description)
-                    {
-                        const separator = descriptionGap ? '\n\n' : '\n';
-                        currentPanel.description += separator + desc;
-                    }
-                    else
-                    {
-                        currentPanel.description = desc;
-                    }
-                    descriptionGap = false;
+                    appendDescription(currentPanel, desc);
 
-                    // Phase 2 task 8: Convention B (canonical column-0 action)
-                    // — an indented action line is a Fountain-incompatible
-                    // tolerance. Warn the author. Conv A is intentionally
-                    // indented; do not warn there.
                     if (panelIndent === 0)
                     {
                         emitWarning('WARN_ACTION_INDENTED', [], {
@@ -1733,17 +1872,7 @@ function parsePages(lines, errors, emitWarning)
         // the description branch already covered column-0 text.
         if (currentPanel && line.trim() !== '' && panelIndent > 0 && !line.startsWith(panelIndentStr) && !line.startsWith('#') && !/^[A-Za-z]+:\s/.test(line))
         {
-            const desc = line.trim();
-            if (currentPanel.description)
-            {
-                const separator = descriptionGap ? '\n\n' : '\n';
-                currentPanel.description += separator + desc;
-            }
-            else
-            {
-                currentPanel.description = desc;
-            }
-            descriptionGap = false;
+            appendDescription(currentPanel, line.trim());
 
             errors.push({
                 line: i,
@@ -1783,18 +1912,38 @@ function parsePages(lines, errors, emitWarning)
             if (panel.description)
             {
                 const spans = parseEmphasis(panel.description);
-                if (spans) panel.spans = spans;
-                // Strip Fountain emphasis escapes from the raw text so renderers
-                // that don't read `spans` still see the literal asterisk/under.
+                if (spans)
+                {
+                    panel.spans = spans;
+                    panel.rawDescription = panel.description;
+                    panel.description = spans.map(s => s.text).join('');
+                }
+                else
+                {
+                    panel.rawDescription = panel.description;
+                }
                 panel.description = stripEmphasisEscapes(panel.description);
+                panel.description = panel.description.replace(/\[\[.*?\]\]/g, '').trim();
+                panel.rawDescription = panel.rawDescription.replace(/\[\[.*?\]\]/g, '').trim();
             }
             for (const d of panel.dialogue)
             {
                 if (d.text)
                 {
                     const spans = parseEmphasis(d.text);
-                    if (spans) d.spans = spans;
+                    if (spans)
+                    {
+                        d.spans = spans;
+                        d.rawText = d.text;
+                        d.text = spans.map(s => s.text).join('');
+                    }
+                    else
+                    {
+                        d.rawText = d.text;
+                    }
                     d.text = stripEmphasisEscapes(d.text);
+                    d.text = d.text.replace(/\[\[.*?\]\]/g, '').trim();
+                    d.rawText = d.rawText.replace(/\[\[.*?\]\]/g, '').trim();
                 }
             }
             if (Array.isArray(panel.sfx))
