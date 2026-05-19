@@ -24,7 +24,7 @@ import { parseFountain } from './fountain-parser.js';
 // =============================================================================
 
 /**
- * @typedef {'scene_heading' | 'action' | 'character' | 'parenthetical' | 'dialogue' | 'transition' | 'title_card' | 'sfx' | 'soundtrack'} ScreenplayElementType
+ * @typedef {'scene_heading' | 'action' | 'character' | 'parenthetical' | 'dialogue' | 'transition' | 'title_card' | 'sfx' | 'soundtrack' | 'page_break' | 'synopsis' | 'section' | 'note'} ScreenplayElementType
  */
 
 /**
@@ -87,6 +87,12 @@ import { parseFountain } from './fountain-parser.js';
  * @typedef {Object} Screenplay
  * @property {string} title
  * @property {string} [author]
+ * @property {string} [credit]
+ * @property {string} [source]
+ * @property {string} [draftDate]
+ * @property {string} [contact]
+ * @property {string} [copyright]
+ * @property {string} [notes]
  * @property {ScreenplayScene[]} scenes
  */
 

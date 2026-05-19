@@ -191,9 +191,15 @@ export function parseFountain(text)
             continue;
         }
 
-        // Skip standalone notes [[...]] (generic Fountain notes, not TITLE_CARD/SFX/_src)
-        if (/^\[\[.+\]\]$/.test(trimmed) && !PATTERNS.titleCardNote.test(trimmed) && !PATTERNS.sfxNote.test(trimmed))
+        // Standalone script note [[...]]
+        if (/^\[\[(.+)\]\]$/.test(trimmed) && !PATTERNS.titleCardNote.test(trimmed) && !PATTERNS.sfxNote.test(trimmed))
         {
+            ensureScene();
+            const noteContent = trimmed.match(/^\[\[(.+)\]\]$/)[1];
+            currentScene.elements.push({
+                type: /** @type {ScreenplayElementType} */ ('note'),
+                content: noteContent
+            });
             cursor++;
             continue;
         }
@@ -412,10 +418,28 @@ export function parseFountain(text)
             continue;
         }
 
-        // Check for synopsis = text
+        // Section headers (## and deeper)
+        const sectionMatch = trimmed.match(/^(#{2,6})\s+(.+)$/);
+        if (sectionMatch)
+        {
+            ensureScene();
+            currentScene.elements.push({
+                type: /** @type {ScreenplayElementType} */ ('section'),
+                content: sectionMatch[2],
+                meta: { depth: sectionMatch[1].length }
+            });
+            cursor++;
+            continue;
+        }
+
+        // Synopsis = text
         if (trimmed.startsWith('= '))
         {
-            // Non-printing, skip
+            ensureScene();
+            currentScene.elements.push({
+                type: /** @type {ScreenplayElementType} */ ('synopsis'),
+                content: trimmed.substring(2)
+            });
             cursor++;
             continue;
         }
@@ -588,7 +612,13 @@ export function parseFountain(text)
 
     return {
         title: titlePage.title || 'Untitled',
-        author: titlePage.author,
+        author: titlePage.author || titlePage.writer || titlePage.by,
+        credit: titlePage.credit,
+        source: titlePage.source,
+        draftDate: titlePage['draft date'],
+        contact: titlePage.contact,
+        copyright: titlePage.copyright,
+        notes: titlePage.notes,
         scenes
     };
 

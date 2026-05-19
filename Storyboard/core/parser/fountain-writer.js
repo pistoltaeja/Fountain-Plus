@@ -84,6 +84,36 @@ function buildTitlePage(metadata, preserveMangaplay = true)
         lines.push(`Genre: ${metadata.genre}`);
     }
 
+    if (metadata.credit)
+    {
+        lines.push(`Credit: ${metadata.credit}`);
+    }
+
+    if (metadata.source)
+    {
+        lines.push(`Source: ${metadata.source}`);
+    }
+
+    if (metadata.draftDate)
+    {
+        lines.push(`Draft date: ${metadata.draftDate}`);
+    }
+
+    if (metadata.contact)
+    {
+        lines.push(`Contact: ${metadata.contact}`);
+    }
+
+    if (metadata.copyright)
+    {
+        lines.push(`Copyright: ${metadata.copyright}`);
+    }
+
+    if (metadata.notes)
+    {
+        lines.push(`Notes: ${metadata.notes}`);
+    }
+
     if (preserveMangaplay)
     {
         if (metadata.format)

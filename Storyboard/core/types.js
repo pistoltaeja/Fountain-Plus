@@ -46,6 +46,12 @@
  * @typedef {Object} ScriptMetadata
  * @property {string} title
  * @property {string} [author]
+ * @property {string} [credit]      - e.g. "written by", "screenplay by"
+ * @property {string} [source]      - e.g. "based on the novel by Daniel Wallace"
+ * @property {string} [draftDate]   - e.g. "January 15, 2003"
+ * @property {string} [contact]     - contact info
+ * @property {string} [copyright]   - copyright notice
+ * @property {string} [notes]       - additional notes
  * @property {string} [genre]
  * @property {Format} [format] - Manga (RTL) or Comic (LTR)
  * @property {number} [totalPages]
