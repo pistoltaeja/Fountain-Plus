@@ -54,7 +54,9 @@ const KNOWN_METADATA_KEYS = new Set([
 // these via diagnostic-i18n.js.
 const WARNING_TEMPLATES = {
     WARN_PAGE_LOWERCASE:
-        'Page header should be uppercase: write "# PAGE {0}" instead of "# {1} {0}".',
+        'Page header casing: write "# Page {0}" instead of "# {1} {0}".',
+    WARN_PAGE_MISSING_HASH:
+        'Page header missing "#" prefix: write "# Page {0}" instead of "Page {0}".',
     WARN_ACTION_INDENTED:
         'Action lines should not be indented. Move to column 0 to match the format.',
     WARN_LEGACY_PANEL:
@@ -64,7 +66,7 @@ const WARNING_TEMPLATES = {
     WARN_RESERVED_MARKER:
         '"{0}" is reserved for future use and was ignored.',
     WARN_IMPLICIT_PAGE_1:
-        'Content found before any "# PAGE" header — synthesised Page 1 implicitly.',
+        'Content found before any "# Page" header — synthesised Page 1 implicitly.',
     PARSE_UNKNOWN_FORMAT:
         'Could not determine input format.',
     PARSE_ORPHAN_DIALOGUE:
@@ -111,7 +113,7 @@ const STATIC_PATTERNS = {
     pages: /^Pages:\s*(\d+)$/m,
     status: /^Status:\s*(.+)$/m,
 
-    // Page header: # PAGE 1 INT. PLACE - TIME (case-insensitive on PAGE keyword)
+    // Page header: # Page 1 INT. PLACE - TIME (case-insensitive on Page keyword)
     // Period after INT/EXT is optional — parser auto-corrects and warns if missing.
     pageHeader: /^#\s+PAGE\s+(\d+(?:-(?:\d+|COVER|[IVXLCDM]+))?)\s*(?:(INT|EXT|EST|INT\.\/EXT\.|INT\/EXT|I\/E)(\.?)\s+(.+?)(?:\s*-\s*(DAY|NIGHT|DAWN|DUSK))?)?$/i
 };
@@ -161,15 +163,17 @@ const PATTERNS = {
 
 /**
  * Build the set of indent-sensitive patterns for a given panel indent.
- * Convention A: panelIndent = 4 (dialogue band at 8).
- * Convention B: panelIndent = 0 (dialogue band at 4).
+ * Convention A: panelIndent = 4, dialogueIndent = 8.
+ * Convention B: panelIndent = 0, dialogueIndent = 4.
+ * Convention C: panelIndent = 0, dialogueIndent = 0.
  * @param {number} panelIndent - Panel band column (0 or 4)
+ * @param {number} dialogueIndent - Dialogue band column
  * @returns {Record<string, RegExp>}
  */
-function makePatterns(panelIndent)
+function makePatterns(panelIndent, dialogueIndent)
 {
     const p = ' '.repeat(panelIndent);
-    const d = ' '.repeat(panelIndent + 4);
+    const d = ' '.repeat(dialogueIndent);
     return {
         ...STATIC_PATTERNS,
         panel:          new RegExp('^' + p + 'Panel\\s+(\\d+(?:-\\d+)?)\\s*((?:\\s*\\[[A-Z][A-Z0-9\\s\\-\\/,]*\\])+)?\\s*$'),
@@ -483,23 +487,35 @@ function processBoneyards(lines, errors)
 /**
  * Tally panelIndent values across all panels; return dominant convention.
  * @param {Page[]} pages
- * @returns {'A' | 'B' | 'mixed' | undefined}
+ * @returns {'A' | 'B' | 'C' | 'mixed' | undefined}
  */
 function computeIndentStyle(pages)
 {
     let a = 0;
     let b = 0;
+    let c = 0;
+    let zeroIndentNoDialogue = 0;
     for (const page of pages)
     {
         for (const panel of page.panels)
         {
-            if (panel._panelIndent === 0) b++;
+            if (panel._panelIndent === 0)
+            {
+                if (panel._dialogueIndent === 0) c++;
+                else if (panel.dialogue.length > 0) b++;
+                else zeroIndentNoDialogue++;
+            }
             else a++; // Default to A when missing (covers 4-space or absent)
         }
     }
-    if (a === 0 && b === 0) return undefined;
-    if (a > 0 && b === 0) return 'A';
-    if (b > 0 && a === 0) return 'B';
+    // Dialogue-less panels at panelIndent 0 are ambiguous between B and C.
+    // When only C panels exist alongside them, report 'C'. When only B, 'B'.
+    // When neither B nor C has evidence but panelIndent-0 panels exist, default to 'B'.
+    if (a === 0 && b === 0 && c === 0 && zeroIndentNoDialogue === 0) return undefined;
+    if (a === 0 && b === 0 && c === 0 && zeroIndentNoDialogue > 0) return 'B';
+    if (a > 0 && b === 0 && c === 0) return 'A';
+    if (b > 0 && a === 0 && c === 0) return 'B';
+    if (c > 0 && a === 0 && b === 0) return 'C';
     return 'mixed';
 }
 
@@ -682,9 +698,10 @@ function parsePages(lines, errors, emitWarning)
     let currentPage = null;
     let currentPanel = null;
     /** @type {Record<string, RegExp>} */
-    let patterns = makePatterns(4); // Default Convention A until first Panel
+    let patterns = makePatterns(4, 8); // Default Convention A until first Panel
     let panelIndent = 4;             // Column of the panel band for currentPanel
-    let dialogueIndentStr = '        '; // cached ' '.repeat(panelIndent + 4)
+    let dialogueIndent = 8;          // Column of the dialogue band (Convention A: 8, B: 4, C: 0)
+    let dialogueIndentStr = '        '; // cached ' '.repeat(dialogueIndent)
     let panelIndentStr = '    ';     // cached ' '.repeat(panelIndent)
     let currentDialogue = null;
     let lastDialogueChar = null;
@@ -717,13 +734,22 @@ function parsePages(lines, errors, emitWarning)
     /**
      * Rebuild the per-panel regex set and indent string caches.
      * @param {number} newIndent
+     * @param {number} [newDialogueIndent] - Explicit dialogue indent; defaults to newIndent + 4
      */
-    const setPanelIndent = (newIndent) =>
+    const setPanelIndent = (newIndent, newDialogueIndent) =>
     {
         panelIndent = newIndent;
+        if (newDialogueIndent !== undefined)
+        {
+            dialogueIndent = newDialogueIndent;
+        }
+        else
+        {
+            dialogueIndent = panelIndent + 4;
+        }
         panelIndentStr = ' '.repeat(panelIndent);
-        dialogueIndentStr = ' '.repeat(panelIndent + 4);
-        patterns = makePatterns(panelIndent);
+        dialogueIndentStr = ' '.repeat(dialogueIndent);
+        patterns = makePatterns(panelIndent, dialogueIndent);
     };
 
     for (let i = 0; i < lines.length; i++)
@@ -792,6 +818,23 @@ function parsePages(lines, errors, emitWarning)
             // Fall through — the new line will hit PANEL_DETECT below.
         }
 
+        // Bare `Page N` (without `#` prefix). Spec: accepted with warning.
+        // Rewrite in-memory to `# Page N` so it falls through to the
+        // standard pageHeader branch below.
+        const barePageMatch = /^Page\s+(\d+(?:-(?:\d+|COVER|[IVXLCDM]+))?)\s*$/i.exec(line);
+        if (barePageMatch && !legacyHashPanel)
+        {
+            emitWarning('WARN_PAGE_MISSING_HASH', [barePageMatch[1]], {
+                line: i,
+                column: 0,
+                length: line.length,
+                severity: 'warning'
+            });
+            line = `# Page ${barePageMatch[1]}`;
+            lines[i] = line;
+            // Fall through — the rewritten line will match STATIC_PATTERNS.pageHeader below.
+        }
+
         // Malformed page header (# PAGE without number).
         // Implicit Page 1 path can re-process the same line index (i--), so
         // guard against duplicate emission with a per-line set.
@@ -805,7 +848,7 @@ function parsePages(lines, errors, emitWarning)
                     line: i,
                     column: 0,
                     length: line.length,
-                    message: `Malformed page header: expected "# PAGE <number>"`,
+                    message: `Malformed page header: expected "# Page <number>"`,
                     severity: 'error'
                 });
             }
@@ -818,11 +861,11 @@ function parsePages(lines, errors, emitWarning)
             // Title page is implicitly terminated by a page header.
             inTitlePage = false;
 
-            // Page-header case warning. Spec V2 §5.1: uppercase canonical;
-            // tolerate `Page` / `page` and warn. Capture the literal "PAGE"
+            // Page-header case warning. Spec §5.1: `Page` canonical, `PAGE`
+            // Fountain alias (no warn); `page` warns. Capture the literal
             // word as written by inspecting the raw line.
             const pageWordMatch = /^#\s+(\S+)/.exec(line);
-            if (pageWordMatch && pageWordMatch[1] !== 'PAGE')
+            if (pageWordMatch && pageWordMatch[1] !== 'Page' && pageWordMatch[1] !== 'PAGE')
             {
                 emitWarning('WARN_PAGE_LOWERCASE', [pageMatch[1], pageWordMatch[1]], {
                     line: i,
@@ -1038,6 +1081,7 @@ function parsePages(lines, errors, emitWarning)
                 lineNumber: i,
                 lineNumberEnd: i,
                 _panelIndent: panelIndent,
+                _dialogueIndent: dialogueIndent,
                 _descParaCount: 0
             };
 
@@ -1362,7 +1406,7 @@ function parsePages(lines, errors, emitWarning)
         // =====================================================================
         const leading = /^[\t ]*/.exec(line)[0].length;
         const trimmed = line.trim();
-        if (currentPanel && trimmed !== '' && leading > panelIndent + 4)
+        if (currentPanel && trimmed !== '' && leading > dialogueIndent)
         {
             // Dialogue continuation at deeper indent: mid-speech parenthetical
             // or text line following a pushed dialogue. Creates a new dialogue
@@ -1774,6 +1818,46 @@ function parsePages(lines, errors, emitWarning)
             }
         }
 
+        // Convention C auto-detection: column-0 character cue.
+        // When panelIndent === 0 (Convention B), an ALL-CAPS line at column 0
+        // followed by non-blank, non-header, non-ALL-CAPS text at column 0
+        // switches to Convention C (dialogueIndent = 0).
+        if (panelIndent === 0 && dialogueIndentStr.length > 0
+            && currentPanel && line === trimmedSH && trimmedSH !== '')
+        {
+            const col0CueMatch = /^([A-Z][A-Z0-9\s'\-]+?)(?:\s+((?:\([A-Z][A-Z0-9.\s'']+\)\s*)+))?(\s*\^)?$/.exec(trimmedSH);
+            if (col0CueMatch
+                && !/[.]$/.test(trimmedSH.replace(/(?:\s*\([A-Z][A-Z0-9.\s'']+\))+$/, '').replace(/\s*\^$/, ''))
+                && !/^[A-Z][A-Z\s]*TO:$/.test(trimmedSH)
+                && !/^FADE (OUT\.|IN:)$/.test(trimmedSH)
+                && !/^SFX[\s:]/i.test(trimmedSH)
+                && !/^TITLE(?::)?\s/i.test(trimmedSH))
+            {
+                // Lookahead: next non-blank line should be plausible dialogue
+                let j = i + 1;
+                while (j < lines.length && lines[j].trim() === '') j++;
+                const next = j < lines.length ? lines[j] : '';
+                const nextTrimmed = next.trim();
+                const nextIsPanel = PANEL_DETECT.test(next);
+                const nextIsPage = /^#\s+PAGE/i.test(next);
+                const nextIsAllCaps = nextTrimmed === nextTrimmed.toUpperCase() && /[A-Z]/.test(nextTrimmed);
+                const nextHasContent = nextTrimmed !== '';
+
+                const nextStartsEmphasis = /^[*_]/.test(nextTrimmed);
+                const nextHasSentencePunct = /[.!?]/.test(nextTrimmed);
+                if (nextHasContent && !nextIsPanel && !nextIsPage
+                    && (!nextIsAllCaps || /^\(/.test(nextTrimmed) || nextStartsEmphasis || nextHasSentencePunct))
+                {
+                    // Switch to Convention C
+                    setPanelIndent(0, 0);
+                    currentPanel._dialogueIndent = 0;
+                    // Re-process this line — it will now match dialogueChar at column 0
+                    i--;
+                    continue;
+                }
+            }
+        }
+
         // Description at panel band.
         // Convention A: line starts with 4 spaces but NOT 8 (reserve 8 for dialogue band).
         // Convention B: panel band is column 0. Description starts at column 0 and does
@@ -1852,7 +1936,7 @@ function parsePages(lines, errors, emitWarning)
                 {
                     appendDescription(currentPanel, desc);
 
-                    if (panelIndent === 0)
+                    if (panelIndent === 0 && dialogueIndentStr.length > 0)
                     {
                         emitWarning('WARN_ACTION_INDENTED', [], {
                             line: i,
