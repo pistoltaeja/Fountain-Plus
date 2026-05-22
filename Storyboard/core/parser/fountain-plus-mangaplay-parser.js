@@ -2140,23 +2140,43 @@ export function stripEmphasisEscapes(s)
     return s.replace(/\\([*_\\])/g, '$1');
 }
 
+function mergeStyles(outer, inner)
+{
+    if (!inner) return outer;
+    if (!outer) return inner;
+    const parts = new Set();
+    for (const s of [outer, inner])
+    {
+        if (s.includes('bold')) parts.add('bold');
+        if (s.includes('italic')) parts.add('italic');
+        if (s.includes('underline')) parts.add('underline');
+    }
+    let base = null;
+    if (parts.has('bold') && parts.has('italic')) base = 'bold-italic';
+    else if (parts.has('bold')) base = 'bold';
+    else if (parts.has('italic')) base = 'italic';
+    if (parts.has('underline'))
+    {
+        return base ? base + '+underline' : 'underline';
+    }
+    return base;
+}
+
 /**
  * Inline emphasis pass. Parses Fountain-style markers `*italic*`, `**bold**`,
  * `***bold italic***`, `_underline_` and produces an array of styled spans.
- * Honours backslash escapes (`\*`, `\_`, `\\`) — escaped markers are emitted
- * literally and never close an emphasis run. Returns null when the text has
- * no styling — callers may then leave the existing `text` field unchanged
- * for backward compatibility.
+ * Handles nesting (e.g. `_**bold underline**_`). Honours backslash escapes
+ * (`\*`, `\_`, `\\`) — escaped markers are emitted literally and never close
+ * an emphasis run. Returns null when the text has no styling — callers may
+ * then leave the existing `text` field unchanged for backward compatibility.
  * @param {string} text
- * @returns {Array<{ text: string, style: 'italic'|'bold'|'bold-italic'|'underline'|null }> | null}
+ * @returns {Array<{ text: string, style: string|null }> | null}
  */
 export function parseEmphasis(text)
 {
     if (!text) return null;
-    // Fast path — no marker char present.
     if (!/[*_]/.test(text)) return null;
 
-    /** @type {Array<{text: string, style: 'italic'|'bold'|'bold-italic'|'underline'|null}>} */
     const spans = [];
     let i = 0;
     let plain = '';
@@ -2172,10 +2192,6 @@ export function parseEmphasis(text)
     while (i < text.length)
     {
         const ch = text[i];
-        // Escape: backslash means take next char literally. The escaped
-        // character lands in `plain` without its backslash, and the
-        // emphasis-marker matchers below must skip escaped markers when
-        // looking for their closing marker (see findUnescapedMarker).
         if (ch === '\\' && i + 1 < text.length)
         {
             plain += text[i + 1];
@@ -2183,14 +2199,26 @@ export function parseEmphasis(text)
             continue;
         }
 
-        // *** … *** (bold italic)
+        // *** … *** (bold-italic)
         if (text.substr(i, 3) === '***')
         {
             const end = findUnescapedMarker(text, '***', i + 3);
             if (end !== -1)
             {
                 flushPlain();
-                spans.push({ text: stripEmphasisEscapes(text.slice(i + 3, end)), style: 'bold-italic' });
+                const inner = text.slice(i + 3, end);
+                const innerSpans = parseEmphasis(inner);
+                if (innerSpans)
+                {
+                    for (const s of innerSpans)
+                    {
+                        spans.push({ text: s.text, style: mergeStyles('bold-italic', s.style) });
+                    }
+                }
+                else
+                {
+                    spans.push({ text: stripEmphasisEscapes(inner), style: 'bold-italic' });
+                }
                 i = end + 3;
                 continue;
             }
@@ -2202,20 +2230,43 @@ export function parseEmphasis(text)
             if (end !== -1)
             {
                 flushPlain();
-                spans.push({ text: stripEmphasisEscapes(text.slice(i + 2, end)), style: 'bold' });
+                const inner = text.slice(i + 2, end);
+                const innerSpans = parseEmphasis(inner);
+                if (innerSpans)
+                {
+                    for (const s of innerSpans)
+                    {
+                        spans.push({ text: s.text, style: mergeStyles('bold', s.style) });
+                    }
+                }
+                else
+                {
+                    spans.push({ text: stripEmphasisEscapes(inner), style: 'bold' });
+                }
                 i = end + 2;
                 continue;
             }
         }
-        // * … * (italic) — must not be a single asterisk surrounded by
-        // whitespace (action like `* test *` is not emphasis).
+        // * … * (italic)
         if (ch === '*')
         {
             const end = findUnescapedMarker(text, '*', i + 1);
             if (end !== -1 && end > i + 1)
             {
                 flushPlain();
-                spans.push({ text: stripEmphasisEscapes(text.slice(i + 1, end)), style: 'italic' });
+                const inner = text.slice(i + 1, end);
+                const innerSpans = parseEmphasis(inner);
+                if (innerSpans)
+                {
+                    for (const s of innerSpans)
+                    {
+                        spans.push({ text: s.text, style: mergeStyles('italic', s.style) });
+                    }
+                }
+                else
+                {
+                    spans.push({ text: stripEmphasisEscapes(inner), style: 'italic' });
+                }
                 i = end + 1;
                 continue;
             }
@@ -2227,7 +2278,19 @@ export function parseEmphasis(text)
             if (end !== -1 && end > i + 1)
             {
                 flushPlain();
-                spans.push({ text: stripEmphasisEscapes(text.slice(i + 1, end)), style: 'underline' });
+                const inner = text.slice(i + 1, end);
+                const innerSpans = parseEmphasis(inner);
+                if (innerSpans)
+                {
+                    for (const s of innerSpans)
+                    {
+                        spans.push({ text: s.text, style: mergeStyles('underline', s.style) });
+                    }
+                }
+                else
+                {
+                    spans.push({ text: stripEmphasisEscapes(inner), style: 'underline' });
+                }
                 i = end + 1;
                 continue;
             }
@@ -2238,7 +2301,6 @@ export function parseEmphasis(text)
     }
     flushPlain();
 
-    // If only a single null-styled span survived, no emphasis was found.
     if (spans.length === 1 && spans[0].style === null) return null;
     if (spans.length === 0) return null;
     return spans;
