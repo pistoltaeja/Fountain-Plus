@@ -8,6 +8,7 @@
         ".": "./index.js",
         "./core/parser": "./core/parser/fountain-plus-mangaplay-parser.js",
         "./core/format-detector": "./core/format-detector.js",
-        "./core/types": "./core/types.js"
+        "./core/types": "./core/types.js",
+        "./core/import": "./core/import/index.js"
     }
 }

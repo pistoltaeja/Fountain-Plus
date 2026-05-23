@@ -6,3 +6,7 @@ export { buildScreenplayIndex, findElementByLine, findLineByElement, getElementM
 export { parseSuperscript } from './core/parser/superscript-parser.js';
 export { extractTags, classifyTags } from './core/parser/tag-classifier.js';
 export { detectFormat } from './core/format-detector.js';
+export { parseFdx } from './core/import/fdx-reader.js';
+export { parseFadein } from './core/import/fadein-reader.js';
+export { parseTxt } from './core/import/txt-reader.js';
+export { parsePdf } from './core/import/pdf-reader.js';
