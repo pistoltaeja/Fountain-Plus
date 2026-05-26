@@ -68,6 +68,12 @@ const TYPE_MAP =
 const CHARACTER_EXT_RE = /^(.+?)\s*\(([^)]+)\)\s*$/;
 const CREDIT_RE = /^(written by|screenplay by|by)$/i;
 
+/**
+ * Fountain-compatible transition pattern: must end in "TO:" or be "FADE OUT."
+ * FDX paragraphs typed as Transition that don't match are demoted to action.
+ */
+const FOUNTAIN_TRANSITION_RE = /\bTO:\s*$|^FADE OUT\.$/i;
+
 // =============================================================================
 // HELPERS
 // =============================================================================
@@ -120,12 +126,14 @@ function extractScriptNotes(parent)
 
 /**
  * Parse the TitlePage element into metadata fields.
+ * Centered text after title/credit/author that doesn't match known metadata
+ * patterns is collected as epigraph (action) content.
  * @param {Element} titlePageEl
- * @returns {{ title: string, author?: string, credit?: string, contact?: string, copyright?: string }}
+ * @returns {{ title: string, author?: string, credit?: string, source?: string, contact?: string, copyright?: string, epigraph: string[] }}
  */
 function parseTitlePage(titlePageEl)
 {
-    const result = { title: '' };
+    const result = { title: '', epigraph: [] };
     const contentEl = titlePageEl.getElementsByTagName('Content')[0];
     if (!contentEl) return result;
 
@@ -153,6 +161,7 @@ function parseTitlePage(titlePageEl)
 
     let foundTitle = false;
     let foundCredit = false;
+    const SOURCE_RE = /^based on /i;
 
     for (const text of centered)
     {
@@ -173,7 +182,17 @@ function parseTitlePage(titlePageEl)
         if (foundCredit && !result.author)
         {
             result.author = text;
+            continue;
         }
+
+        if (foundCredit && !result.source && SOURCE_RE.test(text))
+        {
+            result.source = text;
+            continue;
+        }
+
+        // Remaining centered text is epigraph / body content
+        result.epigraph.push(text);
     }
 
     if (left.length > 0)
@@ -197,19 +216,62 @@ function parseTitlePage(titlePageEl)
 function parseParagraph(paragraph, isDualSecond)
 {
     const fdxType = paragraph.getAttribute('Type') || 'General';
-    const type = TYPE_MAP[fdxType] || 'action';
+    let type = TYPE_MAP[fdxType] || 'action';
     const content = extractText(paragraph);
+
+    // Demote FDX transitions that aren't Fountain-compatible to action
+    if (type === 'transition' && !FOUNTAIN_TRANSITION_RE.test(content.trim()))
+    {
+        type = 'action';
+    }
 
     /** @type {ScreenplayElement} */
     const element = { type, content };
 
+    // FDX parentheticals include outer parens: "(closer)" — strip them
+    // so the Screenplay format matches Fountain's bare "closer".
+    // Downstream writers (PDF, FDX, Fountain) re-add the wrapping parens.
+    if (type === 'parenthetical')
+    {
+        const trimmed = content.trim();
+        if (trimmed.startsWith('(') && trimmed.endsWith(')'))
+        {
+            element.content = trimmed.slice(1, -1);
+        }
+    }
+
     if (type === 'character')
     {
-        const match = content.match(CHARACTER_EXT_RE);
-        if (match)
+        let name = content.trim();
+        // Find where the first parenthesized extension begins
+        const extStart = name.search(/\s*\([^)]+\)\s*$/);
+        if (extStart !== -1)
         {
-            element.content = match[1].trim();
-            element.meta = { modifier: match[2].trim() };
+            // Walk back to find the true start of all chained extensions
+            let scanPos = extStart;
+            while (scanPos > 0)
+            {
+                const before = name.slice(0, scanPos).trimEnd();
+                const prevExt = before.search(/\s*\([^)]+\)$/);
+                if (prevExt === -1) break;
+                scanPos = prevExt;
+            }
+            const rawSuffix = name.slice(scanPos);
+            name = name.slice(0, scanPos).trim();
+            // Extract individual extension texts for meta.modifier
+            const modifiers = [];
+            const modRe = /\(([^)]+)\)/g;
+            let mm;
+            while ((mm = modRe.exec(rawSuffix)) !== null)
+            {
+                modifiers.push(mm[1]);
+            }
+            element.content = name;
+            element.meta = { modifier: modifiers.join(') ('), rawExtension: rawSuffix };
+        }
+        else
+        {
+            element.content = name;
         }
         if (isDualSecond)
         {
@@ -376,6 +438,8 @@ export function parseFdx(xml)
     const screenplay = { title: '', scenes: [] };
 
     // Title page
+    /** @type {ScreenplayElement[]} */
+    let epigraphElements = [];
     const titlePageEl = root.getElementsByTagName('TitlePage')[0];
     if (titlePageEl)
     {
@@ -383,8 +447,15 @@ export function parseFdx(xml)
         screenplay.title = meta.title;
         if (meta.author) screenplay.author = meta.author;
         if (meta.credit) screenplay.credit = meta.credit;
+        if (meta.source) screenplay.source = meta.source;
         if (meta.contact) screenplay.contact = meta.contact;
         if (meta.copyright) screenplay.copyright = meta.copyright;
+
+        // Epigraph text from the title page becomes action content
+        if (meta.epigraph.length > 0)
+        {
+            epigraphElements.push({ type: 'action', content: meta.epigraph.join(' ') });
+        }
     }
 
     // Content
@@ -401,7 +472,7 @@ export function parseFdx(xml)
 
     if (contentEl)
     {
-        const elements = parseContent(contentEl);
+        const elements = [...epigraphElements, ...parseContent(contentEl)];
         screenplay.scenes = groupIntoScenes(elements);
 
         // Apply sceneLabel from FDX Number attribute

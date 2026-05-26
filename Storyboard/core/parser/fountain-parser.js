@@ -30,11 +30,12 @@ const PATTERNS = {
     titlePageKey: /^([A-Za-z ]+):\s*(.*)$/,
 
     // Scene headings: INT. or EXT. (or forced with leading .)
-    sceneHeading: /^(INT|EXT|EST|INT\.\/EXT\.|INT\/EXT|I\/E)\.?\s+(.+)$/i,
-    forcedSceneHeading: /^\..+$/,
+    sceneHeading: /^(INT|EXT|EST|INT\.\/EXT\.|INT\/EXT|EXT\.\/INT\.|EXT\/INT|I\/E|E\/I)\.?\s+(.+)$/i,
+    nonStandardHeading: /^(FLASHBACK|FLASH BACK|MONTAGE|INTERCUT|BACK TO SCENE|DREAM SEQUENCE|FANTASY SEQUENCE|TIME CUT|SERIES OF SHOTS)\.?\s*(.*)$/i,
+    forcedSceneHeading: /^\.[^.].+$/,
 
     // Character: ALL CAPS preceded by blank line, possibly with modifier and/or dual dialogue ^
-    character: /^([A-Z][A-Z0-9\s'&,\-]+?)(?:\s+((?:\([A-Z][A-Z0-9.\s'']+\)\s*)+))?(\s+\^)?$/,
+    character: /^([A-Z][A-Z0-9\s'&,.\-]+?)(?:\s+((?:\([A-Z][A-Z0-9.,\s']+\)\s*)+))?(\s+\^)?$/,
 
     // Parenthetical
     parenthetical: /^\((.+)\)$/,
@@ -61,6 +62,8 @@ const PATTERNS = {
  */
 export function parseFountain(text)
 {
+    text = text.replace(/[‘’]/g, "'");
+    text = text.replace(/[“”]/g, '"');
     const rawLines = text.split('\n');
 
     // Pre-process: strip boneyard comments /* ... */ (can span multiple lines)
@@ -275,6 +278,38 @@ export function parseFountain(text)
             continue;
         }
 
+        // Check for non-standard scene heading (FLASHBACK, MONTAGE, etc.)
+        const nonStdMatch = trimmed.match(PATTERNS.nonStandardHeading);
+        if (nonStdMatch)
+        {
+            if (currentScene)
+            {
+                scenes.push(currentScene);
+            }
+
+            let heading = trimmed;
+            let sceneLabel = undefined;
+            const sceneNumMatch = heading.match(/\s*#([^#]+)#\s*$/);
+            if (sceneNumMatch)
+            {
+                heading = heading.substring(0, heading.length - sceneNumMatch[0].length);
+                sceneLabel = sceneNumMatch[1].trim();
+            }
+
+            sceneNumber++;
+            currentScene = {
+                heading,
+                sceneNumber,
+                sceneLabel,
+                elements: [],
+                pageId: undefined
+            };
+
+            pendingSrc = null;
+            cursor++;
+            continue;
+        }
+
         // Check for forced scene heading
         if (PATTERNS.forcedSceneHeading.test(trimmed))
         {
@@ -409,9 +444,12 @@ export function parseFountain(text)
                 const sfxInDialogue = nextTrimmed.match(PATTERNS.sfxNote);
                 if (titleCardInDialogue || sfxInDialogue) break;
 
+                // Preserve inline whitespace (e.g. spaces around emphasis markers)
+                const rawForcedDialogue = lines[cursor].replace(/\[\[.*?\]\]/g, '');
+                if (!rawForcedDialogue.trim()) { cursor++; continue; }
                 currentScene.elements.push({
                     type: /** @type {ScreenplayElementType} */ ('dialogue'),
-                    content: nextTrimmed
+                    content: rawForcedDialogue
                 });
                 cursor++;
             }
@@ -493,7 +531,7 @@ export function parseFountain(text)
 
             if (charMatch[2])
             {
-                const exts = charMatch[2].match(/\([A-Z][A-Z0-9.\s'']+\)/g);
+                const exts = charMatch[2].match(/\([A-Z][A-Z0-9.,\s'']+\)/g);
                 if (exts)
                 {
                     charElement.meta.modifier = exts.map(e => e.slice(1, -1).trim()).join(') (');
@@ -576,13 +614,13 @@ export function parseFountain(text)
                     break; // Not dialogue, let outer loop handle
                 }
 
-                // Dialogue text
-                const dialogueContent = nextTrimmed.replace(/\[\[.*?\]\]/g, '').trim();
-                if (dialogueContent)
+                // Dialogue text — preserve inline whitespace (e.g. spaces around emphasis markers)
+                const rawDialogueLine = lines[cursor].replace(/\[\[.*?\]\]/g, '');
+                if (rawDialogueLine.trim())
                 {
                     currentScene.elements.push({
                         type: /** @type {ScreenplayElementType} */ ('dialogue'),
-                        content: dialogueContent
+                        content: rawDialogueLine
                     });
                 }
                 cursor++;
@@ -591,14 +629,14 @@ export function parseFountain(text)
             continue;
         }
 
-        // Default: action
+        // Default: action — preserve inline whitespace (e.g. spaces around emphasis markers)
         ensureScene();
-        const actionContent = trimmed.replace(/\[\[.*?\]\]/g, '').trim();
-        if (actionContent)
+        const rawActionLine = line.replace(/\[\[.*?\]\]/g, '');
+        if (rawActionLine.trim())
         {
             currentScene.elements.push({
                 type: /** @type {ScreenplayElementType} */ ('action'),
-                content: actionContent
+                content: rawActionLine
             });
         }
         cursor++;
@@ -611,7 +649,7 @@ export function parseFountain(text)
     }
 
     return {
-        title: titlePage.title || 'Untitled',
+        title: titlePage.title || '',
         author: titlePage.author || titlePage.writer || titlePage.by,
         credit: titlePage.credit,
         source: titlePage.source,

@@ -23,9 +23,184 @@
 
 import { parseTitleCard } from './screenplay-parser.js';
 
+const STANDARD_HEADING_RE = /^(INT|EXT|EST|INT\.\/EXT\.|INT\/EXT|EXT\.\/INT\.|EXT\/INT|I\/E|E\/I)\.?\s/i;
+const ACTION_NEEDS_FORCE_RE = /^[A-Z][A-Z0-9\s'&,.\-:]+$/;
+
 // =============================================================================
-// MAIN EXPORT
+// MAIN EXPORTS
 // =============================================================================
+
+/**
+ * Convert a Screenplay object to Fountain text format.
+ * Used for non-mangaplay inputs (FDX, Fade In, TXT, PDF) that parse directly to Screenplay.
+ *
+ * @param {import('./screenplay-parser.js').Screenplay} screenplay
+ * @returns {string}
+ */
+export function screenplayToFountain(screenplay)
+{
+    const lines = [];
+
+    // Title page — multi-line values use tab-indented continuation lines
+    const titleFields = [
+        ['Title', screenplay.title],
+        ['Author', screenplay.author],
+        ['Credit', screenplay.credit],
+        ['Source', screenplay.source],
+        ['Draft date', screenplay.draftDate],
+        ['Contact', screenplay.contact],
+        ['Copyright', screenplay.copyright],
+        ['Notes', screenplay.notes],
+    ];
+    for (const [key, value] of titleFields)
+    {
+        if (!value) continue;
+        const fieldLines = value.split('\n');
+        lines.push(`${key}: ${fieldLines[0]}`);
+        for (let i = 1; i < fieldLines.length; i++)
+        {
+            lines.push(`\t${fieldLines[i]}`);
+        }
+    }
+    if (lines.length > 0) lines.push('');
+
+    for (const scene of screenplay.scenes)
+    {
+        if (scene.heading)
+        {
+            lines.push('');
+            const needsForce = !STANDARD_HEADING_RE.test(scene.heading);
+            let headingLine = needsForce ? `.${scene.heading}` : scene.heading;
+            if (scene.sceneLabel)
+            {
+                headingLine += ` #${scene.sceneLabel}#`;
+            }
+            lines.push(headingLine);
+        }
+
+        for (const el of scene.elements)
+        {
+            switch (el.type)
+            {
+                case 'scene_heading':
+                {
+                    lines.push('');
+                    const needsForce = !STANDARD_HEADING_RE.test(el.content);
+                    lines.push(needsForce ? `.${el.content}` : el.content);
+                    break;
+                }
+                case 'action':
+                    lines.push('');
+                    if (el.meta?.centered)
+                    {
+                        lines.push(`> ${el.content.trim()} <`);
+                    }
+                    else if (el.meta?.lyrics)
+                    {
+                        lines.push(`~${el.content}`);
+                    }
+                    else
+                    {
+                        const firstLine = el.content.split('\n')[0];
+                        if (ACTION_NEEDS_FORCE_RE.test(firstLine))
+                        {
+                            lines.push('!' + el.content);
+                        }
+                        else
+                        {
+                            lines.push(el.content);
+                        }
+                    }
+                    break;
+                case 'character':
+                {
+                    lines.push('');
+                    let charLine = el.content.toUpperCase();
+                    if (el.meta?.modifier)
+                    {
+                        charLine += ` (${el.meta.modifier.toUpperCase()})`;
+                    }
+                    if (el.meta?.dualDialogue)
+                    {
+                        charLine += ' ^';
+                    }
+                    lines.push(charLine);
+                    break;
+                }
+                case 'parenthetical':
+                {
+                    const text = el.content;
+                    if (text.startsWith('(') && text.endsWith(')'))
+                    {
+                        lines.push(text);
+                    }
+                    else
+                    {
+                        lines.push(`(${text})`);
+                    }
+                    break;
+                }
+                case 'dialogue':
+                    lines.push(el.content);
+                    break;
+                case 'transition':
+                {
+                    lines.push('');
+                    const t = el.content;
+                    if (t.endsWith('TO:') || t === 'FADE OUT.' || t === 'FADE IN:')
+                    {
+                        lines.push(t);
+                    }
+                    else
+                    {
+                        lines.push(`> ${t}`);
+                    }
+                    break;
+                }
+                case 'page_break':
+                    lines.push('');
+                    lines.push('===');
+                    break;
+                case 'synopsis':
+                    lines.push('');
+                    lines.push(`= ${el.content}`);
+                    break;
+                case 'section':
+                    lines.push('');
+                    lines.push(`# ${el.content}`);
+                    break;
+                case 'note':
+                    lines.push('');
+                    lines.push(`[[${el.content}]]`);
+                    break;
+                case 'title_card':
+                {
+                    lines.push('');
+                    if (el.meta?.segments && el.meta.segments.length > 0)
+                    {
+                        const segText = el.meta.segments.map(s => s.text).join(' | ');
+                        lines.push(`[[TITLE_CARD: ${segText}]]`);
+                    }
+                    else
+                    {
+                        lines.push(`[[TITLE_CARD: ${el.content}]]`);
+                    }
+                    break;
+                }
+                case 'sfx':
+                    lines.push('');
+                    lines.push(`[[SFX: ${el.content}]]`);
+                    break;
+                case 'soundtrack':
+                    lines.push('');
+                    lines.push(`[[SOUNDTRACK: ${el.content}]]`);
+                    break;
+            }
+        }
+    }
+
+    return lines.join('\n');
+}
 
 /**
  * Convert a Mangaplay AST to Fountain text format.
