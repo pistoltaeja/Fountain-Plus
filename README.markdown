@@ -1,6 +1,8 @@
-# Fountain-Plus
+# Fountain+
 
-Fountain-Plus implements the [Mangaplay](https://mangaplay.studio) format with [Fountain](http://fountain.io) to extend screenplay functionality and add storyboard capabilities for comics, manga, and webtoons. It is a superset of Fountain that targets storyboards.
+Fountain+ aka Fountain-Plus implements the [Mangaplay](https://mangaplay.studio) format with [Fountain](http://fountain.io) to extend screenplay functionality and add storyboard capabilities for comics, manga, and webtoons. It is a superset of Fountain that targets storyboards.
+
+Fountain+ also comes along with built in readers and writers for popular screenplay formats.
 
 ## Storyboard Package
 
@@ -34,6 +36,16 @@ Storyboard/
 ├── sample/               — Sample .mangaplay and .fountain files
 └── tests/                — Parser unit tests
 ```
+
+---
+
+## Apps using Fountain+
+
+- **[Fountain+ Converter](https://fountain.plus/screenplay-converter)** — Free browser-based screenplay format converter (Fountain, FDX, Fade In, PDF, Mangaplay, plain text)
+- **[Fountain+ Screenplay Checker](https://fountain.plus/screenplay-checker)** — Free browser-based screenplay checker & pre-coverage reports (scene, character, location, cast)
+- **[Fountain+ Exporter For Google Docs](https://workspace.google.com/marketplace/app/fountain+_exporter/189600936550)** — Google Workspace add-on that exports Google Docs screenplays to industry formats
+- **[Mangaplay Studio App](https://mangaplay.studio/app)** — Manga/comic/screenplay storyboard editor with real-time panel preview
+- **[Mangaplay Studio for Google Docs](https://chromewebstore.google.com/detail/script-to-storyboard-%C2%B7-go/hiidpbendbgfcdidhccnldbkgdeikibi)** — Chrome extension that turns Google Docs into a live storyboard
 
 ---
 
