@@ -12,3 +12,5 @@ export { parseFadein } from './core/import/fadein-reader.js';
 export { parseTxt } from './core/import/txt-reader.js';
 export { parsePdf } from './core/import/pdf-reader.js';
 export { parseViaFountain } from './core/import/fountain-intermediate.js';
+export { runHeuristics } from './core/checker/checker-heuristics.js';
+export { classifyWarnings, applyAutoFixes } from './core/checker/checker-critical.js';

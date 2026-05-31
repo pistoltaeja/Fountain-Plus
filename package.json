@@ -1,0 +1,17 @@
+{
+    "name": "@fountain-plus/root",
+    "private": true,
+    "version": "0.1.0",
+    "description": "Fountain-Plus monorepo — Storyboard parser + Statistics library",
+    "type": "module",
+    "workspaces": [
+        "Storyboard",
+        "Statistics"
+    ],
+    "scripts": {
+        "test": "bun test --only-failures",
+        "test:storyboard": "bun test Storyboard",
+        "test:statistics": "bun test Statistics"
+    },
+    "license": "MIT"
+}

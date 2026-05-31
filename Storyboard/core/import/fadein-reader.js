@@ -86,7 +86,7 @@ function extractText(para)
 }
 
 /**
- * Get the basestylename from a <para>'s <style> child.
+ * Get the basestyle from a <para>'s <style> child.
  * @param {Element} para
  * @returns {string}
  */
@@ -94,7 +94,7 @@ function getStyleName(para)
 {
     const styleEl = para.getElementsByTagName('style')[0];
     if (!styleEl) return '';
-    return styleEl.getAttribute('basestylename') || '';
+    return styleEl.getAttribute('basestyle') || styleEl.getAttribute('basestylename') || '';
 }
 
 /**
@@ -254,7 +254,7 @@ function parseParagraphs(paragraphsEl)
                 pendingDualDialogue = false;
             }
 
-            if (getStyleAttr(para, 'dualDialogue') === '1')
+            if (getStyleAttr(para, 'dualdialogue') === '1')
             {
                 pendingDualDialogue = true;
             }

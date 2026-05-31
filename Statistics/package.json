@@ -1,0 +1,12 @@
+{
+    "name": "@fountain-plus/statistics",
+    "version": "0.1.0",
+    "description": "Zero-dependency screenplay statistics for Fountain and Mangaplay formats",
+    "type": "module",
+    "main": "index.js",
+    "exports": {
+        ".": "./index.js",
+        "./analyzers": "./analyzers.js"
+    },
+    "license": "MIT"
+}

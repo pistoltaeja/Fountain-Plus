@@ -279,8 +279,10 @@ export function parseFountain(text)
         }
 
         // Check for non-standard scene heading (FLASHBACK, MONTAGE, etc.)
+        // Skip if the line ends with ":" — those are transitions/directives
+        // (e.g. "FLASHBACK TO:", "INTERCUT WITH:"), not scene headings.
         const nonStdMatch = trimmed.match(PATTERNS.nonStandardHeading);
-        if (nonStdMatch)
+        if (nonStdMatch && !trimmed.endsWith(':'))
         {
             if (currentScene)
             {
