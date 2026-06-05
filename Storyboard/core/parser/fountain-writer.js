@@ -62,6 +62,24 @@ export function screenplayToFountain(screenplay)
             lines.push(`\t${fieldLines[i]}`);
         }
     }
+
+    // Extra centered title-page metadata (episode subtitle, draft label, studio,
+    // production co., producer credits) that pdf-reader captures but the schema
+    // doesn't have dedicated slots for. Emit as a single multi-line `Notes:`
+    // field so the round-trip preserves them.
+    if (!screenplay.notes && Array.isArray(screenplay.titlePageExtra) && screenplay.titlePageExtra.length > 0)
+    {
+        const extras = screenplay.titlePageExtra.filter(s => typeof s === 'string' && s.trim());
+        if (extras.length > 0)
+        {
+            lines.push(`Notes: ${extras[0]}`);
+            for (let i = 1; i < extras.length; i++)
+            {
+                lines.push(`\t${extras[i]}`);
+            }
+        }
+    }
+
     if (lines.length > 0) lines.push('');
 
     for (const scene of screenplay.scenes)
@@ -115,7 +133,14 @@ export function screenplayToFountain(screenplay)
                 case 'character':
                 {
                     lines.push('');
-                    let charLine = el.content.toUpperCase();
+                    // Strip Fountain emphasis markers — the character-cue regex
+                    // requires plain ALL-CAPS and rejects asterisks/underscores,
+                    // so a cue like "**MILDRED**" would re-parse as action and
+                    // drag the following dialogue into action with it.
+                    const plain = el.content
+                        .replace(/\*{1,3}/g, '')
+                        .replace(/_/g, '');
+                    let charLine = plain.toUpperCase();
                     if (el.meta?.modifier)
                     {
                         charLine += ` (${el.meta.modifier.toUpperCase()})`;
@@ -141,8 +166,17 @@ export function screenplayToFountain(screenplay)
                     break;
                 }
                 case 'dialogue':
-                    lines.push(el.content);
+                {
+                    // Dialogue emphasis-marker safety: the pattern "/**" (slash
+                    // immediately before bold markers) confuses the fountain
+                    // parser into treating the markers as an opening run, which
+                    // swallows the following slug. Pad with a space so the
+                    // parser sees the marker cleanly. Other emphasis preserved.
+                    let dialogueContent = el.content;
+                    dialogueContent = dialogueContent.replace(/\/(\*{1,3})/g, '/ $1');
+                    lines.push(dialogueContent);
                     break;
+                }
                 case 'transition':
                 {
                     lines.push('');

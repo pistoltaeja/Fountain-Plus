@@ -10,6 +10,7 @@
         "./core/format-detector": "./core/format-detector.js",
         "./core/types": "./core/types.js",
         "./core/import": "./core/import/index.js",
-        "./core/checker": "./core/checker/checker-heuristics.js"
+        "./core/checker": "./core/checker/checker-heuristics.js",
+        "./core/format-sniff": "./core/format-sniff.js"
     }
 }

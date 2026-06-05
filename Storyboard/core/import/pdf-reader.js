@@ -61,7 +61,16 @@ const DUAL_DIALOGUE_GAP_PT = 25;
 // REGEXES
 // =============================================================================
 
-const SCENE_HEADING_RE = /^(INT|EXT|EST|INT\.\/EXT\.|INT\/EXT|I\/E)[\.\s\/]/i;
+// Optional leading scene-number token (e.g. "1 ", "A23 ", "7A ", "A23A ").
+// Numbers may carry alpha prefix or suffix (production-draft style).
+const SCENE_NUMBER_PREFIX_RE = /^([A-Z]?\d+[A-Z]?|[A-Z]\d*)\s+/;
+const SCENE_HEADING_RE = /^(?:[A-Z]?\d+[A-Z]?\s+|[A-Z]\s+)?(INT|EXT|EST|INT\.\/EXT\.|INT\/EXT|I\/E)[\.\s\/]/i;
+
+// TV-script structural markers. Centered, all-caps, optionally
+// trailing period. Treated as scene-heading boundaries so that
+// `groupIntoScenes` opens a new scene container on each act break.
+const TV_ACT_MARKER_RE = /^(?:TEASER|COLD\s+OPEN|ACT\s+[A-Z]+|END\s+OF\s+ACT(?:\s+[A-Z]+)?|END\s+ACT(?:\s+[A-Z]+)?|TAG|END\s+OF\s+SHOW)\.?$/;
+
 const CHARACTER_CUE_RE = /^[A-Z][A-Z0-9\s'&,.\-‘’]+$/;
 const CHARACTER_EXT_RE = /^([A-Z][A-Z0-9\s'&,\-‘’]+?)\s*((?:\([^)]+\)\s*)+)$/;
 const TRANSITION_RE = /^[A-Z][A-Z\s]+TO:$/;
@@ -104,6 +113,22 @@ function stripEmphasis(text)
             changed = true;
         }
     }
+    return s;
+}
+
+/**
+ * Strip leading/trailing scene-number tokens (e.g. "1 ", "A23 ", " 7A") from a
+ * scene-heading line. Returns the cleaned slug. The numeric token is dropped
+ * because `groupIntoScenes` assigns its own sequential `sceneNumber`.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+function stripSceneNumber(text)
+{
+    let s = text.trim();
+    s = s.replace(SCENE_NUMBER_PREFIX_RE, '');
+    s = s.replace(/\s+([A-Z]?\d+[A-Z]?)\s*$/, '');
     return s;
 }
 
@@ -728,6 +753,11 @@ function buildMarginProfile(lines)
         if (PAGE_NUMBER_RE.test(line.text)) continue;
         // Skip right-column lines so dual-dialogue outliers don't poison the histogram
         if (line.column !== undefined && line.column > 0) continue;
+        // Skip slugs carrying a leading scene-number token (e.g. "202 EXT. ...").
+        // pdf.js Y-clusters the number into the same line as the slug, shifting
+        // line.x left of the action margin. Including these poisons leftMargin.
+        const plainForHist = stripEmphasis(line.text);
+        if (SCENE_NUMBER_PREFIX_RE.test(plainForHist) && SCENE_HEADING_RE.test(plainForHist)) continue;
 
         const bucket = Math.round(line.x / BUCKET_WIDTH) * BUCKET_WIDTH;
         histogram.set(bucket, (histogram.get(bucket) || 0) + 1);
@@ -746,10 +776,18 @@ function buildMarginProfile(lines)
         };
     }
 
-    const leftMargin = sorted[0][0];
-
+    // leftMargin should be the leftmost significant x-bucket — action paragraphs
+    // are always at the leftmost column in a screenplay. Picking the most-common
+    // bucket fails on TV scripts where dialogue lines outnumber action lines.
     const totalLines = sorted.reduce((sum, e) => sum + e[1], 0);
     const minBucketCount = Math.max(10, Math.round(totalLines * 0.01));
+    const significantSortedByX = sorted
+        .filter(([, count]) => count >= minBucketCount)
+        .sort((a, b) => a[0] - b[0]);
+    const leftMargin = significantSortedByX.length > 0
+        ? significantSortedByX[0][0]
+        : sorted[0][0];
+
     const significantBuckets = sorted
         .filter(([x, count]) => x > leftMargin + 15 && count >= minBucketCount)
         .sort((a, b) => b[1] - a[1]);
@@ -813,9 +851,32 @@ function classifyLine(line, profile, prevLine, nextLine)
 
     const xDelta = line.x - profile.leftMargin;
 
-    if (SCENE_HEADING_RE.test(plainText) && Math.abs(xDelta) < 30)
+    // Scene-heading classification:
+    //  - bypass the xDelta gate when the line carries a scene-number prefix
+    //    (e.g. "4 EXT. STREET - DAY") — the prefix shifts line.x left.
+    //  - bypass the xDelta gate when the slug regex matches AND content is
+    //    short (< 120 chars) AND all-caps — buildMarginProfile can pick the
+    //    wrong leftMargin (e.g. dialogue cluster) on TV-script PDFs where
+    //    dialogue lines outnumber action lines. False positives are
+    //    extremely unlikely: a 120-char all-caps line starting with INT./EXT.
+    //    is overwhelmingly a slug.
+    const hasScenePrefix = SCENE_NUMBER_PREFIX_RE.test(plainText);
+    const matchesSlug = SCENE_HEADING_RE.test(plainText);
+    const looksLikeSlug = matchesSlug && plainText.length < 120 && plainText === plainText.toUpperCase();
+    if (matchesSlug && (Math.abs(xDelta) < 30 || hasScenePrefix || looksLikeSlug))
     {
-        return { type: 'scene_heading', content: stripEmphasis(text) };
+        return { type: 'scene_heading', content: stripSceneNumber(stripEmphasis(text)) };
+    }
+
+    // TV-act structural marker (e.g. "ACT ONE.", "END OF ACT TWO.")
+    // These are centered, not left-margin — relax the x-delta gate.
+    if (TV_ACT_MARKER_RE.test(plainText))
+    {
+        return {
+            type: 'scene_heading',
+            content: stripEmphasis(text),
+            meta: { actBoundary: true }
+        };
     }
 
     if (TRANSITION_RE.test(plainText) || FADE_RE.test(plainText))
@@ -940,7 +1001,13 @@ function classifyLineType(line, profile)
     const charThreshold = (profile.characterX - profile.dialogueX) / 2 + profile.dialogueX;
     const dialogueThreshold = (profile.dialogueX - profile.leftMargin) / 2 + profile.leftMargin;
 
-    if (SCENE_HEADING_RE.test(plainText) && Math.abs(xDelta) < 30) return 'scene_heading';
+    {
+        const matchesSlug = SCENE_HEADING_RE.test(plainText);
+        const hasScenePrefix = SCENE_NUMBER_PREFIX_RE.test(plainText);
+        const looksLikeSlug = matchesSlug && plainText.length < 120 && plainText === plainText.toUpperCase();
+        if (matchesSlug && (Math.abs(xDelta) < 30 || hasScenePrefix || looksLikeSlug)) return 'scene_heading';
+    }
+    if (TV_ACT_MARKER_RE.test(plainText)) return 'scene_heading';
     if (TRANSITION_RE.test(plainText) || FADE_RE.test(plainText)) return 'transition';
 
     if (xDelta > charThreshold - profile.leftMargin)
@@ -1007,6 +1074,8 @@ function extractTitlePage(firstPageLines, profile)
 
     let foundTitle = false;
     let foundCredit = false;
+    /** @type {string[]} */
+    const extra = [];
 
     for (const line of centeredLines)
     {
@@ -1030,8 +1099,16 @@ function extractTitlePage(firstPageLines, profile)
         if (foundCredit && !result.author)
         {
             result.author = stripEmphasis(text);
+            continue;
         }
+
+        // Centered metadata that doesn't fit title/credit/author —
+        // episode subtitle, source line, draft label, draft date, studio,
+        // production co., producer attribution. Preserve verbatim.
+        extra.push(stripEmphasis(text));
     }
+
+    if (extra.length > 0) result.extra = extra;
 
     return result;
 }
@@ -1227,6 +1304,10 @@ export async function parsePdf(pdfBuffer, getDocument)
         screenplay.title = titleInfo.title;
         if (titleInfo.author) screenplay.author = titleInfo.author;
         if (titleInfo.credit) screenplay.credit = titleInfo.credit;
+        if (titleInfo.extra && titleInfo.extra.length > 0)
+        {
+            screenplay.titlePageExtra = titleInfo.extra;
+        }
     }
 
     /** @type {ScreenplayElement[]} */
