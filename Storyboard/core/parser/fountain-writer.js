@@ -25,6 +25,10 @@ import { parseTitleCard } from './screenplay-parser.js';
 
 const STANDARD_HEADING_RE = /^(INT|EXT|EST|INT\.\/EXT\.|INT\/EXT|EXT\.\/INT\.|EXT\/INT|I\/E|E\/I)\.?\s/i;
 const ACTION_NEEDS_FORCE_RE = /^[A-Z][A-Z0-9\s'&,.\-:]+$/;
+// Matches the cue-body shape that fountain-parser's character regex accepts
+// (parser regex at fountain-parser.js:38). Cues that fail this need to be
+// emitted with a leading `@` force-cue marker so round-trip parsing works.
+const NATURAL_CUE_RE = /^[A-Z][A-Z0-9\s'&,.\-]+$/;
 
 // =============================================================================
 // MAIN EXPORTS
@@ -148,6 +152,15 @@ export function screenplayToFountain(screenplay)
                     if (el.meta?.dualDialogue)
                     {
                         charLine += ' ^';
+                    }
+                    // Force-cue prefix `@` for cues whose body fountain-parser's
+                    // character regex won't accept (e.g. `S/1 CAPTION` — slash
+                    // not allowed; `V/O CAPTION` likewise). The `@` is stripped
+                    // by parseFountain on re-parse so the resulting cue content
+                    // is unchanged.
+                    if (!NATURAL_CUE_RE.test(plain.toUpperCase()))
+                    {
+                        charLine = '@' + charLine;
                     }
                     lines.push(charLine);
                     break;

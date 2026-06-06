@@ -71,11 +71,15 @@ const SCENE_HEADING_RE = /^(?:[A-Z]?\d+[A-Z]?\s+|[A-Z]\s+)?(INT|EXT|EST|INT\.\/E
 // `groupIntoScenes` opens a new scene container on each act break.
 const TV_ACT_MARKER_RE = /^(?:TEASER|COLD\s+OPEN|ACT\s+[A-Z]+|END\s+OF\s+ACT(?:\s+[A-Z]+)?|END\s+ACT(?:\s+[A-Z]+)?|TAG|END\s+OF\s+SHOW)\.?$/;
 
-const CHARACTER_CUE_RE = /^[A-Z][A-Z0-9\s'&,.\-‘’]+$/;
+const CHARACTER_CUE_RE = /^[A-Z][A-Z0-9\s'&,.\-\/‘’]+$/;
 const CHARACTER_EXT_RE = /^([A-Z][A-Z0-9\s'&,\-‘’]+?)\s*((?:\([^)]+\)\s*)+)$/;
 const TRANSITION_RE = /^[A-Z][A-Z\s]+TO:$/;
 const FADE_RE = /^(FADE OUT\.|FADE IN:|CUT TO BLACK\.)$/;
 const PAGE_NUMBER_RE = /^\d{1,4}\.?$/;
+const CONTINUED_HINT_RE = /^\(CONTINUED\)$/;
+const MORE_HINT_RE = /^\(MORE\)$/;
+const SCENE_CONTINUATION_RE = /^\d+[A-Z]?\s+CONTINUED(?:\s*:\s*\(\d+\))?\s*:?$/;
+const SHOT_DIRECTION_RE = /^\d+[A-Z]?\s+[A-Z]/;
 const CREDIT_RE = /^(written by|screenplay by|by)$/i;
 
 /**
@@ -506,7 +510,16 @@ async function extractPageLines(page, underlineRegions)
 
                     if (!isBold && !isItalic)
                     {
-                        isBold = true;
+                        // pdf.js strips font names to anonymized handles like
+                        // `g_d2_f1` when font subsetting/embedding obscures the
+                        // real font. For those we have no signal about whether
+                        // the font is bold/italic, so don't assume — leaving it
+                        // plain matches the visual rendering. Only fall back to
+                        // "assume bold" when the font name was preserved.
+                        if (!/^g_d\d+_f\d+$/.test(run.fontName))
+                        {
+                            isBold = true;
+                        }
                     }
                 }
 
@@ -669,6 +682,77 @@ async function extractPageLines(page, underlineRegions)
     return lines;
 }
 
+const HEADER_FOOTER_EDGE_FRACTION = 0.10;       // top/bottom 10% of page height
+const HEADER_FOOTER_PAGE_RATIO = 0.90;          // line must repeat on ≥90% of pages
+
+/**
+ * Detect lines that appear repeatedly in the top/bottom edge bands across
+ * pages — these are page-headers / page-footers (script title, revision
+ * date, page number, etc.) and should not bleed into the screenplay
+ * elements. The gate is intentionally strict: a line is only dropped if it
+ * appears on ≥90% of pages at the same y-position with the same digit-
+ * stripped lowercase text. That excludes legitimate body content that just
+ * happens to land near the page edge on one or two pages.
+ *
+ * @param {PdfLine[]} lines        — all lines, with .pageIndex set
+ * @param {number}    pageCount    — total pages walked
+ * @param {number}    pageHeight   — pt height of the page viewport
+ * @returns {Set<number>}          — set of indices in `lines` to drop
+ */
+function detectPageHeaderFooterLines(lines, pageCount, pageHeight)
+{
+    if (pageCount < 3 || pageHeight <= 0) return new Set();
+
+    const topBandY = pageHeight * (1 - HEADER_FOOTER_EDGE_FRACTION);
+    const bottomBandY = pageHeight * HEADER_FOOTER_EDGE_FRACTION;
+    const minPages = Math.max(1, Math.ceil(pageCount * HEADER_FOOTER_PAGE_RATIO));
+
+    /** @type {Map<string, Set<number>>} */
+    const keyToPages = new Map();
+    /** @type {Map<string, number[]>} */
+    const keyToLineIdx = new Map();
+
+    for (let i = 0; i < lines.length; i++)
+    {
+        const line = lines[i];
+        const text = (line.text || '').trim();
+        if (!text) continue;
+
+        // Skip lines that PAGE_NUMBER_RE would already drop downstream
+        if (PAGE_NUMBER_RE.test(text)) continue;
+
+        const inEdge = line.y >= topBandY || line.y <= bottomBandY;
+        if (!inEdge) continue;
+
+        // Normalise: lowercase, collapse whitespace, strip digits so
+        // "May 1 Blue Draft--p.2" / "May 1 Blue Draft--p.3" / ... collapse.
+        const normalised = text.toLowerCase().replace(/\s+/g, ' ').replace(/\d+/g, '').trim();
+        if (!normalised) continue;
+
+        // Y-bucket to 2pt to allow tiny baseline jitter
+        const yBucket = Math.round(line.y / 2) * 2;
+        const key = `${yBucket}|${normalised}`;
+
+        if (!keyToPages.has(key))
+        {
+            keyToPages.set(key, new Set());
+            keyToLineIdx.set(key, []);
+        }
+        keyToPages.get(key).add(line.pageIndex);
+        keyToLineIdx.get(key).push(i);
+    }
+
+    const dropIdx = new Set();
+    for (const [key, pageSet] of keyToPages)
+    {
+        if (pageSet.size >= minPages)
+        {
+            for (const idx of keyToLineIdx.get(key)) dropIdx.add(idx);
+        }
+    }
+    return dropIdx;
+}
+
 /**
  * Extract all lines from all pages of a PDF document.
  * Computes per-page median line spacing for paragraph detection.
@@ -682,12 +766,15 @@ async function extractAllLines(pdfDoc)
     /** @type {PdfLine[]} */
     const allLines = [];
 
-    /** @type {number[]} */
-    const allGaps = [];
+    let firstPageHeight = 0;
 
     for (let i = 1; i <= pageCount; i++)
     {
         const page = await pdfDoc.getPage(i);
+        if (i === 1)
+        {
+            firstPageHeight = page.view ? page.view[3] : 0;
+        }
         const underlineRegions = await extractUnderlineRegions(page);
         const pageLines = await extractPageLines(page, underlineRegions);
 
@@ -696,16 +783,34 @@ async function extractAllLines(pdfDoc)
             line.pageIndex = i - 1;
             allLines.push(line);
         }
+    }
 
-        // Collect y-gaps between consecutive lines on this page (top-to-bottom = descending y)
-        for (let j = 1; j < pageLines.length; j++)
+    const headerFooterIdx = detectPageHeaderFooterLines(allLines, pageCount, firstPageHeight);
+    let filteredLines = allLines;
+    if (headerFooterIdx.size > 0)
+    {
+        filteredLines = allLines.filter((_, idx) => !headerFooterIdx.has(idx));
+    }
+
+    // Compute y-gaps between consecutive lines on each page (top-to-bottom = descending y).
+    // Grouped by pageIndex; filteredLines preserves source order.
+    /** @type {number[]} */
+    const allGaps = [];
+    let lastPageIdx = -1;
+    let prevY = null;
+    for (const ln of filteredLines)
+    {
+        if (ln.pageIndex !== lastPageIdx)
         {
-            const gap = pageLines[j - 1].y - pageLines[j].y;
-            if (gap > 0)
-            {
-                allGaps.push(gap);
-            }
+            prevY = null;
+            lastPageIdx = ln.pageIndex;
         }
+        if (prevY !== null)
+        {
+            const gap = prevY - ln.y;
+            if (gap > 0) allGaps.push(gap);
+        }
+        prevY = ln.y;
     }
 
     let medianLineSpacing = 20;
@@ -718,7 +823,7 @@ async function extractAllLines(pdfDoc)
             : allGaps[mid];
     }
 
-    return { lines: allLines, pageCount, medianLineSpacing };
+    return { lines: filteredLines, pageCount, medianLineSpacing };
 }
 
 // =============================================================================
@@ -780,7 +885,9 @@ function buildMarginProfile(lines)
     // are always at the leftmost column in a screenplay. Picking the most-common
     // bucket fails on TV scripts where dialogue lines outnumber action lines.
     const totalLines = sorted.reduce((sum, e) => sum + e[1], 0);
-    const minBucketCount = Math.max(10, Math.round(totalLines * 0.01));
+    const maxBucketCount = sorted[0][1];
+    const proportionalFloor = Math.round(maxBucketCount * 0.25);
+    const minBucketCount = Math.max(10, Math.round(totalLines * 0.01), proportionalFloor);
     const significantSortedByX = sorted
         .filter(([, count]) => count >= minBucketCount)
         .sort((a, b) => a[0] - b[0]);
@@ -843,11 +950,26 @@ function classifyLine(line, profile, prevLine, nextLine)
 
     if (!text) return null;
     if (PAGE_NUMBER_RE.test(text)) return null;
+    if (CONTINUED_HINT_RE.test(text)) return null;
+    if (MORE_HINT_RE.test(text)) return null;
+    if (SCENE_CONTINUATION_RE.test(text)) return null;
 
     // Strip bold/italic markdown for classification only (preserves original in output)
     const plainText = stripEmphasis(text);
 
     if (PAGE_NUMBER_RE.test(plainText)) return null;
+    if (CONTINUED_HINT_RE.test(plainText)) return null;
+    if (MORE_HINT_RE.test(plainText)) return null;
+    if (SCENE_CONTINUATION_RE.test(plainText)) return null;
+
+    // OCR noise: a "line" that, with markdown emphasis stripped and all
+    // whitespace removed, contains no letters and no digits is OCR-captured
+    // punctuation garbage (stray dashes, dots, parens, slashes, dingbats). It
+    // has no meaningful content; emitting it as a centered action would
+    // produce `> **/** <` style fountain that breaks downstream parseFountain
+    // slug detection.
+    const stripped = plainText.replace(/[\s_*]/g, '');
+    if (stripped.length > 0 && !/[A-Za-z0-9]/.test(stripped)) return null;
 
     const xDelta = line.x - profile.leftMargin;
 
@@ -879,7 +1001,13 @@ function classifyLine(line, profile, prevLine, nextLine)
         };
     }
 
-    if (TRANSITION_RE.test(plainText) || FADE_RE.test(plainText))
+    // Drop FADE IN: / FADE OUT. / CUT TO BLACK. entirely — parseFountain
+    // doesn't recognize these as transitions on the round-trip (it drops
+    // FADE IN: and misparses FADE OUT. / CUT TO BLACK. as character cues),
+    // so emitting them as transitions inflates transition_count_drift on
+    // every PDF that uses them.
+    if (FADE_RE.test(plainText)) return null;
+    if (TRANSITION_RE.test(plainText))
     {
         return { type: 'transition', content: stripEmphasis(text) };
     }
@@ -940,6 +1068,13 @@ function classifyLine(line, profile, prevLine, nextLine)
             }
             return { type: 'character', content: text };
         }
+        // Cluster A4: a short numbered all-caps line is a shooting-script shot
+        // direction, not dialogue. Round-trip parses it as action, so classify as
+        // action here for symmetry.
+        if (SHOT_DIRECTION_RE.test(plainText) && plainText.length < 50 && plainText === plainText.toUpperCase())
+        {
+            return { type: 'action', content: stripEmphasis(text) };
+        }
         return { type: 'dialogue', content: text };
     }
 
@@ -950,6 +1085,13 @@ function classifyLine(line, profile, prevLine, nextLine)
             const prevType = classifyLineType(prevLine, profile);
             if (prevType === 'character' || prevType === 'parenthetical' || prevType === 'dialogue')
             {
+                // Cluster A4: a short numbered all-caps line is a shooting-script shot
+                // direction, not dialogue. Round-trip parses it as action, so classify as
+                // action here for symmetry.
+                if (SHOT_DIRECTION_RE.test(plainText) && plainText.length < 50 && plainText === plainText.toUpperCase())
+                {
+                    return { type: 'action', content: stripEmphasis(text) };
+                }
                 return { type: 'dialogue', content: text };
             }
         }
@@ -971,6 +1113,13 @@ function classifyLine(line, profile, prevLine, nextLine)
             const prevType = classifyLineType(prevLine, profile);
             if (prevType === 'character' || prevType === 'parenthetical' || prevType === 'dialogue')
             {
+                // Cluster A4: a short numbered all-caps line is a shooting-script shot
+                // direction, not dialogue. Round-trip parses it as action, so classify as
+                // action here for symmetry.
+                if (SHOT_DIRECTION_RE.test(plainText) && plainText.length < 50 && plainText === plainText.toUpperCase())
+                {
+                    return { type: 'action', content: stripEmphasis(text) };
+                }
                 return { type: 'dialogue', content: text };
             }
         }
@@ -991,11 +1140,26 @@ function classifyLineType(line, profile)
 {
     const text = line.text.trim();
     if (PAGE_NUMBER_RE.test(text)) return 'action';
+    if (CONTINUED_HINT_RE.test(text)) return 'action';
+    if (MORE_HINT_RE.test(text)) return 'action';
+    if (SCENE_CONTINUATION_RE.test(text)) return 'action';
 
     // Strip bold/italic markdown for classification only
     const plainText = stripEmphasis(text);
 
     if (PAGE_NUMBER_RE.test(plainText)) return 'action';
+    if (CONTINUED_HINT_RE.test(plainText)) return 'action';
+    if (MORE_HINT_RE.test(plainText)) return 'action';
+    if (SCENE_CONTINUATION_RE.test(plainText)) return 'action';
+
+    // OCR noise: a "line" that, with markdown emphasis stripped and all
+    // whitespace removed, contains no letters and no digits is OCR-captured
+    // punctuation garbage (stray dashes, dots, parens, slashes, dingbats). It
+    // has no meaningful content; emitting it as a centered action would
+    // produce `> **/** <` style fountain that breaks downstream parseFountain
+    // slug detection.
+    const stripped = plainText.replace(/[\s_*]/g, '');
+    if (stripped.length > 0 && !/[A-Za-z0-9]/.test(stripped)) return 'action';
 
     const xDelta = line.x - profile.leftMargin;
     const charThreshold = (profile.characterX - profile.dialogueX) / 2 + profile.dialogueX;
@@ -1008,7 +1172,11 @@ function classifyLineType(line, profile)
         if (matchesSlug && (Math.abs(xDelta) < 30 || hasScenePrefix || looksLikeSlug)) return 'scene_heading';
     }
     if (TV_ACT_MARKER_RE.test(plainText)) return 'scene_heading';
-    if (TRANSITION_RE.test(plainText) || FADE_RE.test(plainText)) return 'transition';
+    // FADE IN: / FADE OUT. / CUT TO BLACK. are dropped by classifyLine (the
+    // round-trip parseFountain doesn't see them as transitions). Mirror that
+    // here so lookahead/lookbehind doesn't treat them as transitions.
+    if (FADE_RE.test(plainText)) return 'action';
+    if (TRANSITION_RE.test(plainText)) return 'transition';
 
     if (xDelta > charThreshold - profile.leftMargin)
     {
@@ -1377,6 +1545,25 @@ export async function parsePdf(pdfBuffer, getDocument)
     }
 
     const merged = mergeConsecutiveElements(elements, medianLineSpacing);
+
+    // Cluster E: a dialogue element whose content is fully wrapped in
+    // parens AND whose predecessor is a character cue is structurally a
+    // parenthetical. This can't be detected pre-merge because the raw PDF
+    // often splits multi-line parens (e.g. "(brightening--" + "a new topic)")
+    // across two lines — both halves are classified as dialogue and only
+    // become paren-shaped after mergeConsecutiveElements joins them.
+    for (let i = 0; i < merged.length; i++)
+    {
+        const el = merged[i];
+        if (el.type !== 'dialogue') continue;
+        const c = (el.content || '').trim();
+        if (!/^\(.+\)$/s.test(c)) continue;
+        const prev = i > 0 ? merged[i - 1] : null;
+        if (prev && prev.type === 'character')
+        {
+            el.type = 'parenthetical';
+        }
+    }
 
     const DASH_NORMALIZABLE = new Set(['action', 'dialogue']);
     for (const el of merged)
