@@ -59,6 +59,8 @@ const WARNING_TEMPLATES = {
         'Page header missing "#" prefix: write "# Page {0}" instead of "Page {0}".',
     WARN_ACTION_INDENTED:
         'Action lines should not be indented. Move to column 0 to match the format.',
+    WARN_MIXED_INDENTATION:
+        'Mixed indentation styles in one document — pick one convention for the whole document.',
     WARN_LEGACY_PANEL:
         '"# Panel N" is the legacy form. Prefer "Panel N" or "/* PANEL N */" for Fountain compatibility.',
     WARN_BONEYARD_UNTERMINATED:
@@ -309,9 +311,14 @@ export function parseScript(markdown, options = {})
 
     // Compute dominant indentation convention across the parsed pages.
     // 'A' → all panels at 4-space indent (canonical).
-    // 'B' → all panels at 0-space indent.
-    // 'mixed' → both conventions appear in the same file (e.g. salaryman).
+    // 'B' → all panels at 0-space indent (default).
+    // 'mixed' → both conventions appear in the same file.
     metadata.indentStyle = computeIndentStyle(pages);
+    if (metadata.indentStyle === 'mixed') {
+        emitWarning('WARN_MIXED_INDENTATION', [], {
+            line: 0, column: 0, length: 0, severity: 'warning'
+        });
+    }
 
     // If totalPages not specified, auto-count from content.
     // Mark as implicit so formatters don't round-trip write a Pages line
@@ -489,6 +496,17 @@ function processBoneyards(lines, errors)
  * @param {Page[]} pages
  * @returns {'A' | 'B' | 'C' | 'mixed' | undefined}
  */
+/**
+ * Check if a panel has any dialogue with a forced-cue character.
+ * Forced-cue panels should be excluded from the indent convention set.
+ * @param {Panel} panel
+ * @returns {boolean}
+ */
+function hasForcedCue(panel)
+{
+    return (panel.dialogue || []).some(d => d.character && d.character.startsWith('@'));
+}
+
 function computeIndentStyle(pages)
 {
     let a = 0;
@@ -499,6 +517,11 @@ function computeIndentStyle(pages)
     {
         for (const panel of page.panels)
         {
+            // Skip forced-cue panels from convention counting.
+            // Their indentation is dictated by the cue syntax, not by
+            // the document's stylistic convention.
+            if (hasForcedCue(panel)) continue;
+
             if (panel._panelIndent === 0)
             {
                 if (panel._dialogueIndent === 0) c++;
@@ -1226,6 +1249,10 @@ function parsePages(lines, errors, emitWarning)
                 const extensions = parseExtensions(cueMatch[2]);
                 const isOffPanel = extensions.includes('O.P.') || extensions.includes('O.S.');
                 lastDialogueChar = null;
+                // TBD: dual-dialogue UI integration in <mps-visual-editor>.
+                // Round-trip is correct today; only the visual editing UI is
+                // missing.
+                // See TODO/mps-visual-panel-editor.md → dual-dialogue-tbd task.
                 currentDialogue = {
                     character: charName,
                     type: 'speech',

@@ -1,0 +1,47 @@
+@top Script { line* }
+
+@skip { }
+
+@external tokens lineTokens from "./fountain-tokens.js" {
+  TitlePageEntryTok,
+  SceneHeadingTok,
+  CharacterCueTok,
+  DialogueTok,
+  ParentheticalTok,
+  TransitionTok,
+  CenteredTok,
+  LyricTok,
+  NoteTok,
+  BoneyardTok,
+  PageBreakTok,
+  SectionTok,
+  SynopsisTok,
+  ActionTok,
+  ForcedActionTok,
+  blank
+}
+
+line {
+  TitlePageEntry | SceneHeading | CharacterCue | Dialogue |
+  Parenthetical | Transition | Centered | Lyric |
+  Note | Boneyard | PageBreak | Section | Synopsis |
+  Action | BlankLine
+}
+
+TitlePageEntry { TitlePageEntryTok }
+SceneHeading { SceneHeadingTok }
+CharacterCue { CharacterCueTok }
+Dialogue { DialogueTok }
+Parenthetical { ParentheticalTok }
+Transition { TransitionTok }
+Centered { CenteredTok }
+Lyric { LyricTok }
+Note { NoteTok }
+Boneyard { BoneyardTok }
+PageBreak { PageBreakTok }
+Section { SectionTok }
+Synopsis { SynopsisTok }
+Action { ActionTok | ForcedActionTok }
+BlankLine { blank }
+
+@detectDelim

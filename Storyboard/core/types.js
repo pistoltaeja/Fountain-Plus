@@ -124,6 +124,9 @@
  * @property {DialogueType} type
  * @property {string} text
  * @property {boolean} [offPanel]
+ * TBD: dual-dialogue UI integration in <mps-visual-editor>.
+ * Round-trip is correct today; only the visual editing UI is missing.
+ * See TODO/mps-visual-panel-editor.md → dual-dialogue-tbd task.
  * @property {boolean} [dualDialogue] - Fountain dual dialogue ^
  * @property {string[]} [modifier] - Fountain character extensions e.g. ["CONT'D"], ["SPEAKER", "CONT'D"]
  * @property {boolean} [continuation] - True when this is a continuation beat of the preceding character's block
@@ -159,7 +162,10 @@
  * @property {number} [_panelIndent] - Detected panel indent (0 or 4). Internal.
  */
 
-/**
+ * TBD: page-level direction — add `action` / `description` field for pre-panel prose
+ * on the page. Today these lines attach to the first Panel's description.
+ * See TODO/mps-visual-panel-editor-remediation.md → document-page-direction-v2.
+ *
  * @typedef {Object} Page
  * @property {string} id - Full page ID (e.g., "1", "10-1", "0-COVER", "0-I")
  * @property {number} baseNumber - The numeric portion
