@@ -93,6 +93,9 @@ import { parseFountain } from './fountain-parser.js';
  * @property {string} [contact]
  * @property {string} [copyright]
  * @property {string} [notes]
+ * @property {string[]} [characters] - Character names from title page (optional)
+ * @property {string[]} [vocabulary] - Custom vocabulary words from title page (optional)
+ * @property {string[]} [warnings] - Lossy-conversion notices from format-specific parsers (optional)
  * @property {ScreenplayScene[]} scenes
  */
 
@@ -374,6 +377,18 @@ export function astToScreenplay(ast)
 {
     const fountain = mangaplayToFountain(ast);
     const screenplay = parseFountain(fountain);
+
+    // Surface characters / vocabulary from AST metadata if present.
+    // Leave properties undefined when absent so the optional-field shape
+    // is preserved (deep-equal tests depending on absence keep working).
+    if (ast?.metadata?.characters && ast.metadata.characters.length > 0)
+    {
+        screenplay.characters = ast.metadata.characters.slice();
+    }
+    if (ast?.metadata?.vocabulary && ast.metadata.vocabulary.length > 0)
+    {
+        screenplay.vocabulary = ast.metadata.vocabulary.slice();
+    }
 
     for (const scene of screenplay.scenes)
     {

@@ -22,6 +22,7 @@
 /** @typedef {import('../types.js').TitleCard} TitleCard */
 
 import { parseTitleCard } from './screenplay-parser.js';
+import { formatPageHeading } from '../export/export-styles.js';
 
 const STANDARD_HEADING_RE = /^(INT|EXT|EST|INT\.\/EXT\.|INT\/EXT|EXT\.\/INT\.|EXT\/INT|I\/E|E\/I)\.?\s/i;
 const ACTION_NEEDS_FORCE_RE = /^[A-Z][A-Z0-9\s'&,.\-:]+$/;
@@ -39,11 +40,19 @@ const NATURAL_CUE_RE = /^[A-Z][A-Z0-9\s'&,.\-]+$/;
  * Used for non-mangaplay inputs (FDX, Fade In, TXT, PDF) that parse directly to Screenplay.
  *
  * @param {import('./screenplay-parser.js').Screenplay} screenplay
+ * @param {Object} [options]
+ * @param {import('../export/export-styles.js').PageHeadingStyleValue} [options.pageHeadingStyle] - Optional page heading style; emitted as a synopsis line when set so it survives Fountain re-parse.
+ * @param {import('../export/export-styles.js').PanelHeadingStyleValue} [options.panelHeadingStyle] - Optional panel heading style; reserved for future use.
+ * @param {string} [options.locale='en'] - Locale tag for longhand page headings.
  * @returns {string}
  */
-export function screenplayToFountain(screenplay)
+export function screenplayToFountain(screenplay, options = {})
 {
     const lines = [];
+    const pageHeadingStyle = options.pageHeadingStyle;
+    const locale = options.locale || 'en';
+    const pageHeadingText = pageHeadingStyle ? formatPageHeading(1, pageHeadingStyle, locale) : null;
+    void pageHeadingText;
 
     // Title page — multi-line values use tab-indented continuation lines
     const titleFields = [

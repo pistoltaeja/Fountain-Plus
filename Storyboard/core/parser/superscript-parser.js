@@ -180,6 +180,28 @@ function parseFrontMatter(lines, errors)
                 case 'status':
                     metadata.status = /** @type {import('../types.js').Status} */ (value);
                     break;
+                case 'characters':
+                {
+                    const parts = value.split(/[,\n]/).map(s => s.trim()).filter(Boolean);
+                    if (parts.length > 0)
+                    {
+                        metadata.characters = metadata.characters
+                            ? metadata.characters.concat(parts)
+                            : parts;
+                    }
+                    break;
+                }
+                case 'vocabulary':
+                {
+                    const parts = value.split(/[,\n]/).map(s => s.trim()).filter(Boolean);
+                    if (parts.length > 0)
+                    {
+                        metadata.vocabulary = metadata.vocabulary
+                            ? metadata.vocabulary.concat(parts)
+                            : parts;
+                    }
+                    break;
+                }
                 // Other keys stored but not mapped to standard metadata
                 default:
                     break;

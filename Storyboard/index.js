@@ -13,5 +13,7 @@ export { parseTxt } from './core/import/txt-reader.js';
 export { parsePdf } from './core/import/pdf-reader.js';
 export { parseViaFountain } from './core/import/fountain-intermediate.js';
 export { readSuperscriptBinary } from './core/import/superscript-reader.js';
+export { PageHeadingStyle, PanelHeadingStyle, formatPageHeading, formatPanelHeading } from './core/export/export-styles.js';
+export { classify, fountainTable, mangaplayTable, supTable } from './core/parser/grammar/grammar-table.js';
 export { runHeuristics } from './core/checker/checker-heuristics.js';
 export { classifyWarnings, applyAutoFixes } from './core/checker/checker-critical.js';

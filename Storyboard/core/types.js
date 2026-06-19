@@ -58,6 +58,8 @@
  * @property {Status} [status]
  * @property {ScriptFormat} [scriptFormat] - Source format (mangaplay or superscript)
  * @property {IndentStyle} [indentStyle] - Dominant indentation convention
+ * @property {string[]} [characters] - Character names from title page (optional)
+ * @property {string[]} [vocabulary] - Custom vocabulary words from title page (optional)
  * @property {boolean} [_totalPagesImplicit] - True when totalPages auto-counted (internal)
  */
 

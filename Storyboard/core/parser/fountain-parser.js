@@ -650,7 +650,8 @@ export function parseFountain(text)
         scenes.push(currentScene);
     }
 
-    return {
+    /** @type {Screenplay} */
+    const result = {
         title: titlePage.title || '',
         author: titlePage.author || titlePage.writer || titlePage.by,
         credit: titlePage.credit,
@@ -661,6 +662,22 @@ export function parseFountain(text)
         notes: titlePage.notes,
         scenes
     };
+
+    // Optional Characters / Vocabulary title-page keys → string[].
+    // Split rule: comma OR newline. Trim each entry. Filter empties.
+    // Leave properties undefined when absent so the field stays optional.
+    if (titlePage.characters)
+    {
+        const parts = titlePage.characters.split(/[,\n]/).map(s => s.trim()).filter(Boolean);
+        if (parts.length > 0) result.characters = parts;
+    }
+    if (titlePage.vocabulary)
+    {
+        const parts = titlePage.vocabulary.split(/[,\n]/).map(s => s.trim()).filter(Boolean);
+        if (parts.length > 0) result.vocabulary = parts;
+    }
+
+    return result;
 
     /**
      * Ensure currentScene exists. If not, create one without heading.

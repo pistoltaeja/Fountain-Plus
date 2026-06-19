@@ -46,7 +46,8 @@ import { extractTags, classifyTags } from './tag-classifier.js';
 // parses without unknown-key warnings. See extension-mangaplay-spec/spec.md §4.
 const KNOWN_METADATA_KEYS = new Set([
     'Title', 'Author', 'Authors', 'Genre', 'Format', 'Pages', 'Status',
-    'Credit', 'Source', 'Draft date', 'Contact', 'Copyright', 'Notes', 'Revision'
+    'Credit', 'Source', 'Draft date', 'Contact', 'Copyright', 'Notes', 'Revision',
+    'Characters', 'Vocabulary'
 ]);
 
 // Default English message templates for warning codes. Used to populate the
@@ -687,6 +688,55 @@ function parseMetadata(markdown)
     const statusMatch = markdown.match(PATTERNS.status);
     if (statusMatch) metadata.status = /** @type {import('../types.js').Status} */ (statusMatch[1].trim());
 
+    // Characters / Vocabulary — line-aware so multi-line continuation lines
+    // (tab or 3+ space indent) are folded into the key's value.
+    const mdLines = markdown.split('\n');
+    /** @type {string|null} */
+    let activeKey = null;
+    /** @type {Record<string, string>} */
+    const collected = {};
+    for (let i = 0; i < mdLines.length; i++)
+    {
+        const line = mdLines[i];
+        // Stop at first page header — title page is over.
+        if (/^#\s+PAGE/i.test(line)) break;
+        if (line.trim() === '')
+        {
+            activeKey = null;
+            continue;
+        }
+        // Continuation line (tab or 3+ leading spaces): append to active key.
+        if (activeKey && /^(\t|   )/.test(line))
+        {
+            collected[activeKey] = collected[activeKey]
+                ? collected[activeKey] + '\n' + line.trim()
+                : line.trim();
+            continue;
+        }
+        const m = line.match(/^([A-Za-z][A-Za-z ]*?):\s*(.*)$/);
+        if (m)
+        {
+            const key = m[1].trim().toLowerCase();
+            activeKey = key;
+            collected[key] = m[2].trim();
+        }
+        else
+        {
+            activeKey = null;
+        }
+    }
+
+    if (collected.characters)
+    {
+        const parts = collected.characters.split(/[,\n]/).map(s => s.trim()).filter(Boolean);
+        if (parts.length > 0) metadata.characters = parts;
+    }
+    if (collected.vocabulary)
+    {
+        const parts = collected.vocabulary.split(/[,\n]/).map(s => s.trim()).filter(Boolean);
+        if (parts.length > 0) metadata.vocabulary = parts;
+    }
+
     return metadata;
 }
 
@@ -1004,9 +1054,14 @@ function parsePages(lines, errors, emitWarning)
                 lastTitleKey = trimmed.split(':')[0].trim();
                 continue;
             }
-            // Title-page continuation line (3+ leading spaces, after a key
-            // was seen). Spec V2 §4.
-            if (inTitlePage && lastTitleKey && /^\s{3,}\S/.test(line))
+            // Title-page continuation line (tab or 3+ leading spaces, after a
+            // key was seen). Spec V2 §4. Parity with fountain-parser.js:125-132:
+            // continuation lines append to the previous key's value (joined with
+            // newline). The folded value lives on `metadata` keyed by the
+            // lowercased key name. Page-content parsing already happens via
+            // parsePages elsewhere — here we just maintain the title-page
+            // bookkeeping so multi-line values aren't silently dropped.
+            if (inTitlePage && lastTitleKey && /^(\t|   )/.test(line))
             {
                 continue;
             }
