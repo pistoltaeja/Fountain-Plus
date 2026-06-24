@@ -56,6 +56,10 @@ const KNOWN_METADATA_KEYS = new Set([
 const WARNING_TEMPLATES = {
     WARN_PAGE_LOWERCASE:
         'Page header casing: write "# Page {0}" instead of "# {1} {0}".',
+    WARN_PAGE_UPPERCASE:
+        'Page header casing: prefer "# Page {0}" over "# PAGE {0}" (canonical form).',
+    WARN_PANEL_CASE:
+        'Panel tags should be camel case (write "Panel {0}" instead of "{1} {0}").',
     WARN_PAGE_MISSING_HASH:
         'Page header missing "#" prefix: write "# Page {0}" instead of "Page {0}".',
     WARN_ACTION_INDENTED:
@@ -70,6 +74,8 @@ const WARNING_TEMPLATES = {
         '"{0}" is reserved for future use and was ignored.',
     WARN_IMPLICIT_PAGE_1:
         'Content found before any "# Page" header — synthesised Page 1 implicitly.',
+    WARN_PAGE_SUFFIX_INVALID:
+        'Page suffix "{0}" is invalid. Use a number, roman numeral, or single letter A–Z (e.g. 1-0, 1-IV, 1-A).',
     PARSE_UNKNOWN_FORMAT:
         'Could not determine input format.',
     PARSE_ORPHAN_DIALOGUE:
@@ -118,7 +124,19 @@ const STATIC_PATTERNS = {
 
     // Page header: # Page 1 INT. PLACE - TIME (case-insensitive on Page keyword)
     // Period after INT/EXT is optional — parser auto-corrects and warns if missing.
-    pageHeader: /^#\s+PAGE\s+(\d+(?:-(?:\d+|COVER|[IVXLCDM]+))?)\s*(?:(INT|EXT|EST|INT\.\/EXT\.|INT\/EXT|I\/E)(\.?)\s+(.+?)(?:\s*-\s*(DAY|NIGHT|DAWN|DUSK))?)?$/i
+    // Page-id suffix accepts: integer (1-0), roman numeral (1-IV), or single
+    // letter A-Z (1-A). The `(?=\s|$)` lookahead enforces a word boundary so
+    // `1-COVER` doesn't sneak through as `1-C` + `OVER`. Multi-letter words
+    // after the dash (e.g. 1-Hello, 0-COVER) are rejected here and detected
+    // separately below to emit a lint warning. Optional trailing free-text
+    // label (group 6) follows the id with optional dash + optional whitespace,
+    // so both `# Page 0-I COVER` and `# Page 1 - some description` are valid.
+    pageHeader: /^#\s+PAGE\s+(\d+(?:-(?:\d+|[IVXLCDM]+|[A-Z]))?)(?=\s|$)\s*(?:(?:(INT|EXT|EST|INT\.\/EXT\.|INT\/EXT|I\/E)(\.?)\s+(.+?)(?:\s*-\s*(DAY|NIGHT|DAWN|DUSK))?)|(?:-?\s*(.+?)))?$/i,
+    // Used to detect malformed page headers like `# Page 1-Hello`: matches a
+    // `# Page N-X` shape where X starts with a non-whitespace token but the
+    // strict pageHeader regex above did NOT match. The captured suffix is
+    // surfaced in WARN_PAGE_SUFFIX_INVALID.
+    pageHeaderInvalidSuffix: /^#\s+PAGE\s+(\d+)-(\S+)/i
 };
 
 // Permissive panel detection. Captures leading indent (group 1) so the parser
@@ -313,12 +331,39 @@ export function parseScript(markdown, options = {})
     // Compute dominant indentation convention across the parsed pages.
     // 'A' → all panels at 4-space indent (canonical).
     // 'B' → all panels at 0-space indent (default).
-    // 'mixed' → both conventions appear in the same file.
-    metadata.indentStyle = computeIndentStyle(pages);
-    if (metadata.indentStyle === 'mixed') {
-        emitWarning('WARN_MIXED_INDENTATION', [], {
-            line: 0, column: 0, length: 0, severity: 'warning'
-        });
+    // 'C' → all panels at 0-space with column-0 dialogue.
+    // 'mixed' → no bucket reaches the 80% dominance threshold.
+    //
+    // Anchor WARN_MIXED_INDENTATION at each offending panel line instead of
+    // line 0 so the editor squiggle lands on the real culprits. Suppress
+    // entirely when only a tiny minority (< 5%) disagrees with the dominant
+    // convention — treat that as deliberate user intent.
+    const indentResult = computeIndentStyle(pages);
+    metadata.indentStyle = indentResult.dominant;
+    let totalCounted = 0;
+    for (const _pg of pages)
+    {
+        for (const _pn of _pg.panels)
+        {
+            if (!hasForcedCue(_pn)) totalCounted++;
+        }
+    }
+    const minorityRatio = totalCounted > 0
+        ? indentResult.minorityPanels.length / totalCounted
+        : 0;
+    if (minorityRatio >= 0.05)
+    {
+        for (const panel of indentResult.minorityPanels)
+        {
+            const ln = (typeof panel.lineNumber === 'number') ? panel.lineNumber : 0;
+            const col = panel._panelIndent || 0;
+            emitWarning('WARN_MIXED_INDENTATION', [], {
+                line: ln,
+                column: col,
+                length: 5, // span the word "Panel"
+                severity: 'warning'
+            });
+        }
     }
 
     // If totalPages not specified, auto-count from content.
@@ -493,11 +538,6 @@ function processBoneyards(lines, errors)
 }
 
 /**
- * Tally panelIndent values across all panels; return dominant convention.
- * @param {Page[]} pages
- * @returns {'A' | 'B' | 'C' | 'mixed' | undefined}
- */
-/**
  * Check if a panel has any dialogue with a forced-cue character.
  * Forced-cue panels should be excluded from the indent convention set.
  * @param {Panel} panel
@@ -508,11 +548,28 @@ function hasForcedCue(panel)
     return (panel.dialogue || []).some(d => d.character && d.character.startsWith('@'));
 }
 
+/**
+ * Tally panelIndent values across all panels; return dominant convention
+ * plus the list of panels that did not match the dominant bucket.
+ *
+ * Buckets:
+ *   A → panelIndent !== 0 (canonical 4-space indent)
+ *   B → panelIndent === 0 with dialogue at non-zero indent (default)
+ *   C → panelIndent === 0 with dialogue at column 0
+ *
+ * Dominant rule:
+ *   - Single bucket only            → that bucket, no minority.
+ *   - Largest bucket >= 80% of total → that bucket; the rest are minority.
+ *   - Otherwise                     → 'mixed'; everything not in the largest
+ *                                     bucket is minority.
+ *
+ * @param {Page[]} pages
+ * @returns {{ dominant: ('A'|'B'|'C'|'mixed'|undefined), minorityPanels: Panel[] }}
+ */
 function computeIndentStyle(pages)
 {
-    let a = 0;
-    let b = 0;
-    let c = 0;
+    /** @type {{ A: Panel[], B: Panel[], C: Panel[] }} */
+    const buckets = { A: [], B: [], C: [] };
     let zeroIndentNoDialogue = 0;
     for (const page of pages)
     {
@@ -525,22 +582,52 @@ function computeIndentStyle(pages)
 
             if (panel._panelIndent === 0)
             {
-                if (panel._dialogueIndent === 0) c++;
-                else if (panel.dialogue.length > 0) b++;
+                if (panel._dialogueIndent === 0) buckets.C.push(panel);
+                else if (panel.dialogue.length > 0) buckets.B.push(panel);
                 else zeroIndentNoDialogue++;
             }
-            else a++; // Default to A when missing (covers 4-space or absent)
+            else buckets.A.push(panel); // Default to A when missing (covers 4-space or absent)
         }
     }
+
+    const a = buckets.A.length;
+    const b = buckets.B.length;
+    const c = buckets.C.length;
+
     // Dialogue-less panels at panelIndent 0 are ambiguous between B and C.
     // When only C panels exist alongside them, report 'C'. When only B, 'B'.
     // When neither B nor C has evidence but panelIndent-0 panels exist, default to 'B'.
-    if (a === 0 && b === 0 && c === 0 && zeroIndentNoDialogue === 0) return undefined;
-    if (a === 0 && b === 0 && c === 0 && zeroIndentNoDialogue > 0) return 'B';
-    if (a > 0 && b === 0 && c === 0) return 'A';
-    if (b > 0 && a === 0 && c === 0) return 'B';
-    if (c > 0 && a === 0 && b === 0) return 'C';
-    return 'mixed';
+    if (a === 0 && b === 0 && c === 0 && zeroIndentNoDialogue === 0)
+    {
+        return { dominant: undefined, minorityPanels: [] };
+    }
+    if (a === 0 && b === 0 && c === 0 && zeroIndentNoDialogue > 0)
+    {
+        return { dominant: 'B', minorityPanels: [] };
+    }
+    if (a > 0 && b === 0 && c === 0) return { dominant: 'A', minorityPanels: [] };
+    if (b > 0 && a === 0 && c === 0) return { dominant: 'B', minorityPanels: [] };
+    if (c > 0 && a === 0 && b === 0) return { dominant: 'C', minorityPanels: [] };
+
+    // Multiple buckets — pick the largest as dominant.
+    const total = a + b + c;
+    /** @type {Array<{ key: 'A'|'B'|'C', count: number, panels: Panel[] }>} */
+    const ranked = [
+        { key: 'A', count: a, panels: buckets.A },
+        { key: 'B', count: b, panels: buckets.B },
+        { key: 'C', count: c, panels: buckets.C }
+    ].sort((x, y) => y.count - x.count);
+
+    const top = ranked[0];
+    const minorityPanels = [];
+    for (let r = 1; r < ranked.length; r++)
+    {
+        for (const p of ranked[r].panels) minorityPanels.push(p);
+    }
+
+    // >= 80% dominance keeps the letter; otherwise mark as 'mixed'.
+    const dominant = (top.count / total) >= 0.8 ? top.key : 'mixed';
+    return { dominant, minorityPanels };
 }
 
 /**
@@ -891,6 +978,32 @@ function parsePages(lines, errors, emitWarning)
             // Fall through — the new line will hit PANEL_DETECT below.
         }
 
+        // Panel-keyword case warning. Canonical is title-case "Panel"; flag
+        // "panel" (lowercase) or "PANEL" (all-caps) at the legal panel band
+        // (column 0 OR exactly 4 spaces of indent). Rewrite the in-memory
+        // line to canonical case so the existing PANEL_DETECT regex matches
+        // and the panel parses normally. Emit a fix-it warning so the editor
+        // can offer a [Change] action.
+        const panelCaseMatch = /^(\s*)(panel|PANEL)\s+(\d+(?:-\d+)?)\s*((?:\s*\[[A-Z][A-Z0-9\s\-\/,]*\])+)?\s*$/.exec(line);
+        if (panelCaseMatch && (panelCaseMatch[1].length === 0 || panelCaseMatch[1].length === 4))
+        {
+            const indent = panelCaseMatch[1];
+            const literal = panelCaseMatch[2];
+            const num = panelCaseMatch[3];
+            const tags = panelCaseMatch[4] || '';
+            emitWarning('WARN_PANEL_CASE', [num, literal], {
+                line: i,
+                column: indent.length,
+                length: literal.length,
+                severity: 'info'
+            });
+            // Rewrite in-memory to canonical case so downstream PANEL_DETECT
+            // proceeds normally.
+            line = `${indent}Panel ${num}${tags}`;
+            lines[i] = line;
+            // Fall through — the rewritten line will hit PANEL_DETECT below.
+        }
+
         // Bare `Page N` (without `#` prefix). Spec: accepted with warning.
         // Rewrite in-memory to `# Page N` so it falls through to the
         // standard pageHeader branch below.
@@ -927,6 +1040,27 @@ function parsePages(lines, errors, emitWarning)
             }
         }
 
+        // Invalid page-id suffix: `# Page 1-Hello` etc. The strict pageHeader
+        // regex doesn't match, but the line clearly intends to be a page header
+        // with a malformed suffix. Surface as a lint warning, then let the line
+        // fall through (parser treats it as action — same shape as today).
+        if (!line.match(STATIC_PATTERNS.pageHeader))
+        {
+            const bad = line.match(STATIC_PATTERNS.pageHeaderInvalidSuffix);
+            if (bad && !malformedHeaderLines.has(i))
+            {
+                // Strip any space-padded trailing label from the captured suffix.
+                const rawSuffix = bad[2].split(/\s+-\s+/, 1)[0];
+                const suffixCol = line.indexOf("-" + rawSuffix);
+                emitWarning("WARN_PAGE_SUFFIX_INVALID", [rawSuffix], {
+                    line: i,
+                    column: suffixCol >= 0 ? suffixCol + 1 : 0,
+                    length: rawSuffix.length,
+                    severity: "warning"
+                });
+            }
+        }
+
         // Page header
         const pageMatch = line.match(STATIC_PATTERNS.pageHeader);
         if (pageMatch)
@@ -945,6 +1079,15 @@ function parsePages(lines, errors, emitWarning)
                     column: line.indexOf(pageWordMatch[1]),
                     length: pageWordMatch[1].length,
                     severity: 'warning'
+                });
+            }
+            else if (pageWordMatch && pageWordMatch[1] === 'PAGE')
+            {
+                emitWarning('WARN_PAGE_UPPERCASE', [pageMatch[1]], {
+                    line: i,
+                    column: line.indexOf(pageWordMatch[1]),
+                    length: pageWordMatch[1].length,
+                    severity: 'info'
                 });
             }
 
@@ -1009,6 +1152,11 @@ function parsePages(lines, errors, emitWarning)
                     place: pageMatch[4] ? pageMatch[4].trim() : '',
                     time: pageMatch[5] ? /** @type {import('../types.js').TimeOfDay} */ (pageMatch[5]) : undefined
                 };
+            }
+            else if (pageMatch[6])
+            {
+                // Free-text trailing label after `- ` (e.g. "COVER", "HOW TO READ").
+                currentPage.label = pageMatch[6].trim();
             }
 
             currentPanel = null;
