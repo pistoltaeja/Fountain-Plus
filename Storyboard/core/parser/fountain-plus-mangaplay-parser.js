@@ -751,11 +751,17 @@ function parseMetadata(markdown)
 {
     /** @type {ScriptMetadata} */
     const metadata = {
-        title: 'Untitled'
+        title: 'Untitled',
+        // _titleImplicit: parser injected default — formatter suppresses emission
+        _titleImplicit: true
     };
 
     const titleMatch = markdown.match(PATTERNS.title);
-    if (titleMatch) metadata.title = titleMatch[1].trim();
+    if (titleMatch)
+    {
+        metadata.title = titleMatch[1].trim();
+        metadata._titleImplicit = false;
+    }
 
     const authorMatch = markdown.match(PATTERNS.author);
     if (authorMatch) metadata.author = authorMatch[1].trim();

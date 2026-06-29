@@ -108,7 +108,9 @@ function parseFrontMatter(lines, errors)
 {
     /** @type {ScriptMetadata} */
     const metadata = {
-        title: 'Untitled'
+        title: 'Untitled',
+        // _titleImplicit: parser injected default — formatter suppresses emission
+        _titleImplicit: true
     };
 
     let contentStart = 0;
@@ -129,6 +131,7 @@ function parseFrontMatter(lines, errors)
         if (titleMatch)
         {
             metadata.title = titleMatch[1].trim();
+            metadata._titleImplicit = false;
             contentStart = i + 1;
             continue;
         }
@@ -162,6 +165,7 @@ function parseFrontMatter(lines, errors)
             {
                 case 'title':
                     metadata.title = value;
+                    metadata._titleImplicit = false;
                     break;
                 case 'writer':
                 case 'by':

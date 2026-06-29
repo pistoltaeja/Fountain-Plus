@@ -61,6 +61,7 @@
  * @property {string[]} [characters] - Character names from title page (optional)
  * @property {string[]} [vocabulary] - Custom vocabulary words from title page (optional)
  * @property {boolean} [_totalPagesImplicit] - True when totalPages auto-counted (internal)
+ * @property {boolean} [_titleImplicit] - True when title is parser-injected default (internal)
  */
 
 /**
